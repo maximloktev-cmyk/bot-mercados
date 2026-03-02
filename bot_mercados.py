@@ -12,14 +12,16 @@ dp = Dispatcher()
 HEADERS = {"User-Agent": "Mozilla/5.0"}
 
 
-async def get_btc_price():
-    url = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true"
+async def get_crypto_prices():
+    url = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum&vs_currencies=usd&include_24hr_change=true"
     async with aiohttp.ClientSession() as session:
         async with session.get(url, headers=HEADERS) as r:
             data = await r.json()
-            price = data["bitcoin"]["usd"]
-            change = data["bitcoin"]["usd_24h_change"]
-            return price, change
+            btc_price = data["bitcoin"]["usd"]
+            btc_change = data["bitcoin"]["usd_24h_change"]
+            eth_price = data["ethereum"]["usd"]
+            eth_change = data["ethereum"]["usd_24h_change"]
+            return btc_price, btc_change, eth_price, eth_change
 
 
 async def get_yahoo_price(ticker):
@@ -42,14 +44,17 @@ async def start(message: types.Message):
 async def analisis(message: types.Message):
     await message.answer("Obteniendo datos en tiempo real...")
     try:
-        btc_price, btc_change = await get_btc_price()
+        btc_price, btc_change, eth_price, eth_change = await get_crypto_prices()
         nasdaq, nasdaq_change = await get_yahoo_price("%5EIXIC")
+        sp500, sp500_change = await get_yahoo_price("%5EGSPC")
         gold, gold_change = await get_yahoo_price("GC%3DF")
 
         texto = (
             f"Resumen en tiempo real:\n\n"
             f"• Bitcoin: ${btc_price:,.0f} ({btc_change:+.2f}% 24h)\n"
+            f"• Ethereum: ${eth_price:,.0f} ({eth_change:+.2f}% 24h)\n"
             f"• Nasdaq: {nasdaq:,.0f} pts ({nasdaq_change:+.2f}%)\n"
+            f"• S&P 500: {sp500:,.0f} pts ({sp500_change:+.2f}%)\n"
             f"• Oro: ${gold:,.0f}/oz ({gold_change:+.2f}%)\n"
         )
     except Exception as e:
