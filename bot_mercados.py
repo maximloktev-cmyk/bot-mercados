@@ -23,15 +23,14 @@ async def get_btc_price():
 
 
 async def get_yahoo_price(ticker):
-    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1d&range=5d"
+    url = f"https://query1.finance.yahoo.com/v7/finance/quote?symbols={ticker}"
     async with aiohttp.ClientSession() as session:
         async with session.get(url, headers=HEADERS) as r:
             data = await r.json()
-            closes = data["chart"]["result"][0]["indicators"]["quote"][0]["close"]
-            closes = [c for c in closes if c is not None]
-            prev, current = closes[-2], closes[-1]
-            change = ((current - prev) / prev) * 100
-            return current, change
+            result = data["quoteResponse"]["result"][0]
+            price = result["regularMarketPrice"]
+            change = result["regularMarketChangePercent"]
+            return price, change
 
 
 @dp.message(Command("start"))
