@@ -6,7 +6,8 @@ import os
 import aiohttp
 import yfinance as yf
 
-TOKEN = os.environ.get("BOT_TOKEN", "8616657604:AAGQI9e_x9ZX5zw6zcHIloboeDO18OrKRBM")
+TOKEN        = os.environ.get("BOT_TOKEN",    "8616657604:AAGQI9e_x9ZX5zw6zcHIloboeDO18OrKRBM")
+FINNHUB_KEY  = os.environ.get("FINNHUB_KEY",  "d6j133pr01qleu95u19gd6j133pr01qleu95u1a0")
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
@@ -181,7 +182,21 @@ async def get_recommendations():
         except Exception:
             continue
 
-    return sorted(results, key=lambda x: x["score"], reverse=True)[:5]
+    top = sorted(results, key=lambda x: x["score"], reverse=True)[:5]
+
+    # Actualizar precios con Finnhub (tiempo real)
+    for r in top:
+        try:
+            q = await get_finnhub_quote(r["ticker"])
+            if q:
+                r["price"]  = q["price"]
+                r["change"] = q["change"]
+                r["high"]   = q["high"]
+                r["low"]    = q["low"]
+        except Exception:
+            pass
+
+    return top
 
 
 def format_recommendations(recs, titulo="Recomendaciones corto plazo"):
@@ -202,9 +217,12 @@ def format_recommendations(recs, titulo="Recomendaciones corto plazo"):
     lines = [f"{titulo} ({len(STOCKS)} acciones analizadas):\n", context, "─" * 30 + "\n"]
 
     for i, r in enumerate(recs, 1):
-        sigs = "\n   • ".join(r["signals"])
+        sigs   = "\n   • ".join(r["signals"])
+        change = f"({r['change']:+.2f}%)" if r.get("change") is not None else ""
+        high   = f"  Max ${r['high']:,.2f}  Min ${r['low']:,.2f}" if r.get("high") else ""
         lines.append(
-            f"{i}. {r['ticker']}  ${r['price']:,.2f}  |  RSI {r['rsi']:.0f}  |  Score {r['score']}\n"
+            f"{i}. {r['ticker']}  ${r['price']:,.2f} {change}  |  RSI {r['rsi']:.0f}  |  Score {r['score']}\n"
+            f"  {high}\n"
             f"   • {sigs}\n"
         )
 
@@ -214,6 +232,23 @@ def format_recommendations(recs, titulo="Recomendaciones corto plazo"):
 
 
 # ── Helpers de precios ──────────────────────────────────────────────────────
+
+async def get_finnhub_quote(ticker):
+    url = f"https://finnhub.io/api/v1/quote?symbol={ticker}&token={FINNHUB_KEY}"
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url, headers=HEADERS) as r:
+            d = await r.json()
+            if not d.get("c"):
+                return None
+            return {
+                "price":   d["c"],
+                "change":  d["dp"],
+                "high":    d["h"],
+                "low":     d["l"],
+                "open":    d["o"],
+                "prev":    d["pc"],
+            }
+
 
 async def get_btc_price():
     url = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true"
@@ -245,8 +280,9 @@ async def start(message: types.Message):
     await message.answer(
         "Hola! Soy tu analista de mercados.\n\n"
         "Comandos:\n"
-        "/analisis — Precios en tiempo real\n"
-        "/acciones — Recomendaciones ahora\n"
+        "/analisis — Índices y Bitcoin en tiempo real\n"
+        "/precio TICKER — Precio en tiempo real de cualquier acción\n"
+        "/acciones — Top 5 recomendaciones ahora\n"
         "/suscribir — Alertas diarias a las 9:30 AM NY\n"
         "/cancelar — Cancelar alertas"
     )
@@ -283,6 +319,26 @@ async def acciones(message: types.Message):
     await message.answer(f"Analizando {len(STOCKS)} acciones, espera 30-60 segundos...")
     recs = await get_recommendations()
     await message.answer(format_recommendations(recs))
+
+
+@dp.message(Command("precio"))
+async def precio(message: types.Message):
+    parts = message.text.strip().split()
+    if len(parts) < 2:
+        await message.answer("Uso: /precio TICKER\nEjemplo: /precio AAPL")
+        return
+    ticker = parts[1].upper()
+    q = await get_finnhub_quote(ticker)
+    if not q:
+        await message.answer(f"No se encontró cotización para {ticker}.")
+        return
+    await message.answer(
+        f"{ticker} — Tiempo real (Finnhub)\n\n"
+        f"• Precio:    ${q['price']:,.2f}  ({q['change']:+.2f}%)\n"
+        f"• Apertura:  ${q['open']:,.2f}\n"
+        f"• Máx/Mín:   ${q['high']:,.2f} / ${q['low']:,.2f}\n"
+        f"• Cierre ant: ${q['prev']:,.2f}\n"
+    )
 
 
 @dp.message(Command("suscribir"))
