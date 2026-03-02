@@ -31,8 +31,11 @@ async def get_stooq_price(ticker):
             text = await r.text()
             lines = text.strip().split("\n")
             values = lines[1].split(",")
+            # Stooq devuelve N/D si el mercado está cerrado o el ticker es incorrecto
+            if "N/D" in values:
+                return None, None
             close = float(values[6])
-            open_ = float(values[4])
+            open_ = float(values[3])
             change = ((close - open_) / open_) * 100
             return close, change
 
@@ -51,13 +54,18 @@ async def analisis(message: types.Message):
         sp500, sp500_change = await get_stooq_price("^spx")
         gold, gold_change = await get_stooq_price("xauusd")
 
+        def fmt_price(price, change, prefix="$", suffix=""):
+            if price is None:
+                return "No disponible (mercado cerrado)"
+            return f"{prefix}{price:,.0f}{suffix} ({change:+.2f}%)"
+
         texto = (
             f"Resumen en tiempo real:\n\n"
-            f"• Bitcoin: ${btc_price:,.0f} ({btc_change:+.2f}% 24h)\n"
-            f"• Ethereum: ${eth_price:,.0f} ({eth_change:+.2f}% 24h)\n"
-            f"• Nasdaq: {nasdaq:,.0f} pts ({nasdaq_change:+.2f}%)\n"
-            f"• S&P 500: {sp500:,.0f} pts ({sp500_change:+.2f}%)\n"
-            f"• Oro: ${gold:,.0f}/oz ({gold_change:+.2f}%)\n"
+            f"• Bitcoin: {fmt_price(btc_price, btc_change)} (24h)\n"
+            f"• Ethereum: {fmt_price(eth_price, eth_change)} (24h)\n"
+            f"• Nasdaq: {fmt_price(nasdaq, nasdaq_change, prefix='', suffix=' pts')}\n"
+            f"• S&P 500: {fmt_price(sp500, sp500_change, prefix='', suffix=' pts')}\n"
+            f"• Oro: {fmt_price(gold, gold_change)}/oz\n"
         )
     except Exception as e:
         texto = f"Error obteniendo datos: {e}"
