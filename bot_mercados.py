@@ -39,24 +39,35 @@ SECTOR_BOOST = {
 
 # ── Universo de acciones ────────────────────────────────────────────────────
 
-def get_stock_universe():
-    try:
-        import pandas as pd
-        sp500  = pd.read_html("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies")[0]["Symbol"].tolist()
-        ndq100 = pd.read_html("https://en.wikipedia.org/wiki/Nasdaq-100")[4]["Ticker"].tolist()
-        extra  = ["PLTR", "COIN", "HOOD", "MSTR", "RIOT", "MARA", "SOFI",
-                  "RKLB", "IONQ", "SMCI", "RIVN", "AXON", "LDOS", "HII"]
-        stocks = list(set(sp500 + ndq100 + extra))
-        return [s.replace(".", "-") for s in stocks]
-    except Exception:
-        return [
-            "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "AMD",
-            "NFLX", "INTC", "CRM", "ADBE", "QCOM", "AVGO", "MU", "PLTR",
-            "JPM", "BAC", "GS", "V", "MA", "COIN", "XOM", "CVX", "OXY",
-            "LMT", "RTX", "NOC", "GD", "UNH", "JNJ", "WMT", "COST", "HD",
-        ]
-
-STOCKS = get_stock_universe()
+STOCKS = [
+    # IA / Semiconductores
+    "NVDA", "AMD", "AVGO", "QCOM", "MU", "INTC", "AMAT", "LRCX", "KLAC",
+    "MRVL", "NXPI", "ON", "TXN", "SMCI", "IONQ", "RKLB",
+    # Big Tech / Cloud
+    "AAPL", "MSFT", "GOOGL", "AMZN", "META", "TSLA", "ORCL", "IBM",
+    "CRM", "ADBE", "NOW", "INTU", "SNPS", "CDNS", "PLTR",
+    # Fintech / Financiero
+    "V", "MA", "PYPL", "SQ", "AFRM", "SOFI", "HOOD", "COIN",
+    "JPM", "BAC", "GS", "MS", "WFC", "C", "AXP", "BLK", "SCHW",
+    # Defensa / Aeroespacial
+    "LMT", "RTX", "NOC", "GD", "BA", "HII", "LDOS", "AXON", "CACI", "SAIC",
+    # Energía
+    "XOM", "CVX", "OXY", "SLB", "HAL", "COP", "EOG", "MPC", "VLO", "PSX",
+    # Salud / Biotech
+    "UNH", "JNJ", "PFE", "ABBV", "MRK", "LLY", "BMY", "AMGN", "GILD",
+    "REGN", "VRTX", "MRNA", "BIIB", "DXCM", "ISRG", "BSX", "EW",
+    # Consumo
+    "AMZN", "WMT", "COST", "HD", "TGT", "NKE", "SBUX", "MCD", "DIS",
+    "NFLX", "ABNB", "BKNG", "MAR", "HLT",
+    # Cripto / Blockchain
+    "MSTR", "RIOT", "MARA", "CLSK", "BTBT",
+    # Industriales
+    "CAT", "DE", "HON", "MMM", "GE", "ETN", "EMR", "PH", "ROK", "IR",
+    # Telecom
+    "T", "VZ", "TMUS",
+    # ETFs populares
+    "SPY", "QQQ", "IWM", "XLK", "XLF", "XLE", "XLV", "XLI", "ARKK",
+]
 
 
 # ── Indicadores técnicos ────────────────────────────────────────────────────
@@ -182,7 +193,18 @@ async def get_recommendations():
         except Exception:
             continue
 
-    top = sorted(results, key=lambda x: x["score"], reverse=True)[:5]
+    ranked = sorted(results, key=lambda x: x["score"], reverse=True)
+
+    # Máximo 2 acciones por sector para diversificar
+    top = []
+    sector_count = {}
+    for r in ranked:
+        sector = r.get("sector") or "General"
+        if sector_count.get(sector, 0) < 2:
+            top.append(r)
+            sector_count[sector] = sector_count.get(sector, 0) + 1
+        if len(top) == 5:
+            break
 
     # Actualizar precios con Finnhub (tiempo real)
     for r in top:
