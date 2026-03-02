@@ -15,14 +15,26 @@ scheduler = AsyncIOScheduler(timezone="America/New_York")
 HEADERS = {"User-Agent": "Mozilla/5.0"}
 subscribers = set()
 
-STOCKS = [
-    "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "AMD",
-    "NFLX", "INTC", "CRM", "ADBE", "QCOM", "AVGO", "MU", "PLTR",
-    "JPM", "BAC", "GS", "V", "MA", "COIN",
-    "XOM", "CVX", "OXY", "UNH", "JNJ", "PFE",
-    "WMT", "COST", "HD", "DIS", "SBUX", "NKE",
-    "MSTR", "HOOD", "SOFI", "RKLB", "IONQ", "SMCI"
-]
+def get_stock_universe():
+    try:
+        import pandas as pd
+        sp500 = pd.read_html("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies")[0]["Symbol"].tolist()
+        ndq100 = pd.read_html("https://en.wikipedia.org/wiki/Nasdaq-100")[4]["Ticker"].tolist()
+        extra = ["PLTR", "COIN", "HOOD", "SOFI", "MSTR", "RKLB", "IONQ", "SMCI", "RIVN", "LCID"]
+        stocks = list(set(sp500 + ndq100 + extra))
+        # limpiar tickers con caracteres especiales (ej: BRK.B → BRK-B)
+        stocks = [s.replace(".", "-") for s in stocks]
+        return stocks
+    except Exception:
+        # fallback si falla Wikipedia
+        return [
+            "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "AMD",
+            "NFLX", "INTC", "CRM", "ADBE", "QCOM", "AVGO", "MU", "PLTR",
+            "JPM", "BAC", "GS", "V", "MA", "COIN", "XOM", "CVX", "OXY",
+            "UNH", "JNJ", "PFE", "WMT", "COST", "HD", "DIS", "SBUX", "NKE"
+        ]
+
+STOCKS = get_stock_universe()
 
 
 # ── Indicadores técnicos ────────────────────────────────────────────────────
