@@ -24,15 +24,17 @@ async def get_crypto_prices():
             return btc_price, btc_change, eth_price, eth_change
 
 
-async def get_yahoo_price(ticker):
-    url = f"https://query1.finance.yahoo.com/v7/finance/quote?symbols={ticker}"
+async def get_stooq_price(ticker):
+    url = f"https://stooq.com/q/l/?s={ticker}&f=sd2t2ohlcv&h&e=csv"
     async with aiohttp.ClientSession() as session:
         async with session.get(url, headers=HEADERS) as r:
-            data = await r.json()
-            result = data["quoteResponse"]["result"][0]
-            price = result["regularMarketPrice"]
-            change = result["regularMarketChangePercent"]
-            return price, change
+            text = await r.text()
+            lines = text.strip().split("\n")
+            values = lines[1].split(",")
+            close = float(values[6])
+            open_ = float(values[4])
+            change = ((close - open_) / open_) * 100
+            return close, change
 
 
 @dp.message(Command("start"))
@@ -45,9 +47,9 @@ async def analisis(message: types.Message):
     await message.answer("Obteniendo datos en tiempo real...")
     try:
         btc_price, btc_change, eth_price, eth_change = await get_crypto_prices()
-        nasdaq, nasdaq_change = await get_yahoo_price("%5EIXIC")
-        sp500, sp500_change = await get_yahoo_price("%5EGSPC")
-        gold, gold_change = await get_yahoo_price("GC%3DF")
+        nasdaq, nasdaq_change = await get_stooq_price("^compq")
+        sp500, sp500_change = await get_stooq_price("^spx")
+        gold, gold_change = await get_stooq_price("xauusd")
 
         texto = (
             f"Resumen en tiempo real:\n\n"
