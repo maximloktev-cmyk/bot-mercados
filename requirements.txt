@@ -1,1 +1,5 @@
 aiogram==3.25.0
+yfinance
+apscheduler
+pandas
+tzdata
