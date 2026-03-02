@@ -66,6 +66,7 @@ async def analisis(message: types.Message):
 
 
 async def main():
+    print("BOT VERSION: Stooq API v2")
     await dp.start_polling(bot)
 
 
