@@ -45,7 +45,7 @@ async def analisis(message: types.Message):
     await message.answer("Obteniendo datos en tiempo real...")
     try:
         btc_price, btc_change = await get_btc_price()
-        nasdaq, nasdaq_change = await get_stooq_price("^ndq")
+        nasdaq, nasdaq_change = await get_stooq_price("^ixic")
         sp500, sp500_change = await get_stooq_price("^spx")
         gold, gold_change = await get_stooq_price("gc.f")
 
@@ -57,7 +57,7 @@ async def analisis(message: types.Message):
         texto = (
             f"Resumen en tiempo real:\n\n"
             f"• Bitcoin: {fmt(btc_price, btc_change)} (24h)\n"
-            f"• Nasdaq 100: {fmt(nasdaq, nasdaq_change, prefix='', suffix=' pts')}\n"
+            f"• Nasdaq: {fmt(nasdaq, nasdaq_change, prefix='', suffix=' pts')}\n"
             f"• S&P 500: {fmt(sp500, sp500_change, prefix='', suffix=' pts')}\n"
             f"• Oro: {fmt(gold, gold_change)}/oz\n"
         )
