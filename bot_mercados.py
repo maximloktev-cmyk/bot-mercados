@@ -50,7 +50,7 @@ async def analisis(message: types.Message):
     await message.answer("Obteniendo datos en tiempo real...")
     try:
         btc_price, btc_change, eth_price, eth_change = await get_crypto_prices()
-        nasdaq, nasdaq_change = await get_stooq_price("^compq")
+        nasdaq, nasdaq_change = await get_stooq_price("^ndq")
         sp500, sp500_change = await get_stooq_price("^spx")
         gold, gold_change = await get_stooq_price("xauusd")
 
