@@ -14,7 +14,9 @@ scheduler     = AsyncIOScheduler(timezone="America/New_York")
 HEADERS       = {"User-Agent": "Mozilla/5.0"}
 subscribers   = set()
 sent_articles = set()
-PERF_FILE     = "/tmp/performance.json"
+PERF_FILE            = "/tmp/performance.json"
+CACHE_FILE           = "/tmp/recommendations_cache.json"
+PREV_CANDIDATES_FILE = "/tmp/prev_candidates.json"
 
 # ── Palabras clave de alto impacto ───────────────────────────────────────────
 IMPACT_KEYWORDS = [
@@ -75,6 +77,45 @@ STOCKS = list(set([
     "SPY","QQQ","IWM","XLK","XLF","XLE","XLV","XLI","ARKK",
 ]))
 
+# ── ETFs de sector para mapa de calor ────────────────────────────────────────
+SECTOR_ETFS = {
+    "Tecnología":   "XLK",
+    "Finanzas":     "XLF",
+    "Energía":      "XLE",
+    "Salud":        "XLV",
+    "Industriales": "XLI",
+    "Cons. Discr.": "XLY",
+    "Cons. Básico": "XLP",
+    "Materiales":   "XLB",
+    "Utilities":    "XLU",
+    "Inmuebles":    "XLRE",
+    "Comunicación": "XLC",
+}
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# 0. PERSISTENCIA DE SEÑALES
+# ════════════════════════════════════════════════════════════════════════════
+
+def load_prev_candidates():
+    """Carga los tickers candidatos del análisis anterior (hasta 36h atrás)."""
+    try:
+        with open(PREV_CANDIDATES_FILE) as f:
+            data = json.load(f)
+        age = (datetime.now() - datetime.fromisoformat(data["timestamp"])).total_seconds()
+        if age < 36 * 3600:
+            return set(data["tickers"])
+    except Exception:
+        pass
+    return set()
+
+def save_prev_candidates(tickers):
+    try:
+        with open(PREV_CANDIDATES_FILE, "w") as f:
+            json.dump({"timestamp": datetime.now().isoformat(), "tickers": list(tickers)}, f)
+    except Exception:
+        pass
+
 
 # ════════════════════════════════════════════════════════════════════════════
 # 1. INDICADORES TÉCNICOS
@@ -106,6 +147,7 @@ def analyze_stock(ticker, df):
         macd_now, macd_prev, sig_now, sig_prev = calc_macd(closes)
         high_20d = float(closes.iloc[-21:-1].max())
         low_20d  = float(closes.iloc[-21:-1].min())
+        high_60d = float(closes.max())
         sma20    = float(closes.iloc[-20:].mean())
         sma50    = float(closes.iloc[-50:].mean())
         vol_avg  = float(volumes.iloc[-21:-1].mean())
@@ -147,6 +189,18 @@ def analyze_stock(ticker, df):
             return None
 
         stop = max(low_20d, sma20 * 0.98)
+        risk = price - stop
+        if risk <= 0:
+            return None
+
+        # ── Filtro R:R mínimo 2:1 ────────────────────────────────────────────
+        # El target 2:1 debe ser alcanzable: se permite si el precio ya
+        # superó el máximo de 60d (breakout a nuevos máximos) o si el
+        # target no está más de un 5% por encima del máximo de 60d.
+        target      = price + 2 * risk
+        is_breakout = price >= high_60d * 0.99
+        if not is_breakout and target > high_60d * 1.05:
+            return None
 
         return {
             "ticker": ticker, "score": score,
@@ -351,6 +405,23 @@ async def get_finnhub_sentiment(ticker):
         return 0, None
 
 
+# ════════════════════════════════════════════════════════════════════════════
+# 7. FILTRO DE EARNINGS (Finnhub)
+# ════════════════════════════════════════════════════════════════════════════
+
+async def has_upcoming_earnings(ticker, days=3):
+    """True si la empresa reporta resultados en los próximos `days` días."""
+    today  = datetime.now().strftime("%Y-%m-%d")
+    future = (datetime.now() + timedelta(days=days)).strftime("%Y-%m-%d")
+    url = (f"https://finnhub.io/api/v1/calendar/earnings"
+           f"?from={today}&to={future}&symbol={ticker}&token={FINNHUB_KEY}")
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=HEADERS) as r:
+                d = await r.json()
+                return len(d.get("earningsCalendar", [])) > 0
+    except Exception:
+        return False  # Si falla el check, no excluir
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -393,9 +464,8 @@ async def get_performance_report():
             q = await get_finnhub_quote(rec["ticker"])
             if q:
                 pnl = ((q["price"] - rec["price"]) / rec["price"]) * 100
-                icon = "+" if pnl > 0 else "-"
-                lines.append(f"  {'✅' if pnl > 0 else '❌'} {rec['ticker']}: "
-                              f"${rec['price']:.2f} → ${q['price']:.2f} ({pnl:+.1f}%)")
+                lines.append(f"  {'OK' if pnl > 0 else 'X '} {rec['ticker']}: "
+                              f"${rec['price']:.2f} -> ${q['price']:.2f} ({pnl:+.1f}%)")
                 wins  += 1 if pnl > 0 else 0
                 total += 1
             else:
@@ -408,16 +478,42 @@ async def get_performance_report():
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# 9. MOTOR DE RECOMENDACIONES
+# 9. RENDIMIENTO POR SECTOR
+# ════════════════════════════════════════════════════════════════════════════
+
+async def get_sector_performance():
+    def fetch():
+        tickers = list(SECTOR_ETFS.values())
+        data    = yf.download(
+            tickers, period="2d", interval="1d",
+            progress=False, group_by="ticker", auto_adjust=True
+        )
+        out = {}
+        for name, etf in SECTOR_ETFS.items():
+            try:
+                df  = data[etf].dropna() if len(tickers) > 1 else data.dropna()
+                cls = df["Close"].squeeze()
+                if len(cls) >= 2:
+                    chg = (float(cls.iloc[-1]) - float(cls.iloc[-2])) / float(cls.iloc[-2]) * 100
+                    out[name] = round(chg, 2)
+            except Exception:
+                pass
+        return out
+    try:
+        return await asyncio.to_thread(fetch)
+    except Exception:
+        return {}
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# 10. MOTOR DE RECOMENDACIONES
 # ════════════════════════════════════════════════════════════════════════════
 
 async def enrich_candidate(r, weekly, macro_adj):
     ticker = r["ticker"]
 
-    # Ajuste macro global
     r["score"] += macro_adj
 
-    # Tendencia semanal
     wk = weekly.get(ticker)
     if wk:
         if wk["bullish"] and wk["rsi_w"] < 65:
@@ -426,7 +522,6 @@ async def enrich_candidate(r, weekly, macro_adj):
         elif not wk["bullish"]:
             r["score"] -= 1
 
-    # Insider buying, opciones inusuales, sentimiento (en paralelo)
     insider, options, st, (reddit_n, reddit_up), (fh_score, fh_label) = await asyncio.gather(
         get_insider_buying(ticker),
         get_unusual_options(ticker),
@@ -467,8 +562,29 @@ async def enrich_candidate(r, weekly, macro_adj):
     return r
 
 
-async def get_recommendations():
-    # Datos diarios (bulk)
+async def get_recommendations(force_refresh=False):
+    # ── 1. Caché de 3 horas ──────────────────────────────────────────────────
+    if not force_refresh:
+        try:
+            with open(CACHE_FILE) as f:
+                cache = json.load(f)
+            age = (datetime.now() - datetime.fromisoformat(cache["timestamp"])).total_seconds()
+            if age < 3 * 3600:
+                # Invalidar si S&P500 se movió más de 1%
+                sp500_now, _ = await get_stooq_price("^spx")
+                sp500_cached = cache.get("sp500")
+                market_moved = (
+                    sp500_now and sp500_cached and
+                    abs(sp500_now - sp500_cached) / sp500_cached * 100 >= 1.0
+                )
+                if not market_moved:
+                    cached_macro = cache.get("macro_lines", [])
+                    cached_macro = [f"(Caché — {datetime.fromisoformat(cache['timestamp']).strftime('%H:%M')})"] + cached_macro
+                    return cache["recs"], cached_macro
+        except Exception:
+            pass
+
+    # ── 2. Descarga bulk ─────────────────────────────────────────────────────
     def fetch_daily():
         return yf.download(STOCKS, period="60d", interval="1d",
                            progress=False, group_by="ticker", auto_adjust=True)
@@ -480,30 +596,55 @@ async def get_recommendations():
 
     macro_adj, macro_lines = interpret_macro(macro)
 
+    # ── 3. Cargar candidatos previos ─────────────────────────────────────────
+    prev_candidates = load_prev_candidates()
+
+    # ── 4. Análisis técnico + bonus persistencia ─────────────────────────────
     results = []
     for ticker in STOCKS:
         try:
             df     = daily_data[ticker].dropna()
             result = analyze_stock(ticker, df)
             if result:
+                if ticker in prev_candidates:
+                    result["score"] += 2
+                    result["tech_signals"].append("Senal persistente (2+ dias)")
                 results.append(result)
         except Exception:
             continue
 
-    ranked     = sorted(results, key=lambda x: x["score"], reverse=True)
-    candidates = ranked[:15]
-    tickers15  = [r["ticker"] for r in candidates]
+    ranked    = sorted(results, key=lambda x: x["score"], reverse=True)
+    tickers15 = [r["ticker"] for r in ranked[:15]]
 
-    # Datos semanales para top 15
-    weekly = await get_weekly_trends(tickers15)
+    # Guardar top-15 para próxima ejecución (persistencia)
+    save_prev_candidates(tickers15)
 
-    # Enriquecer con todo (en paralelo)
+    # ── 5. Filtro earnings (top 15) ──────────────────────────────────────────
+    earnings_flags = await asyncio.gather(*[has_upcoming_earnings(t) for t in tickers15])
+    candidates = [r for r, skip in zip(ranked[:15], earnings_flags) if not skip]
+
+    # Si el filtro dejó muy pocos, completar con los siguientes de ranked
+    if len(candidates) < 5 and len(ranked) > 15:
+        extra      = ranked[15:30]
+        ex_tickers = [r["ticker"] for r in extra]
+        ex_flags   = await asyncio.gather(*[has_upcoming_earnings(t) for t in ex_tickers])
+        for r, skip in zip(extra, ex_flags):
+            if not skip:
+                candidates.append(r)
+            if len(candidates) >= 15:
+                break
+
+    if not candidates:
+        candidates = ranked[:5]  # fallback de emergencia
+
+    # ── 6. Datos semanales + enriquecimiento ─────────────────────────────────
+    weekly   = await get_weekly_trends([r["ticker"] for r in candidates])
     enriched = await asyncio.gather(*[
         enrich_candidate(r, weekly, macro_adj) for r in candidates
     ])
     enriched = sorted(enriched, key=lambda x: x["score"], reverse=True)
 
-    # Máx 2 por sector
+    # ── 7. Máx 2 por sector ───────────────────────────────────────────────────
     top          = []
     sector_count = {}
     for r in enriched:
@@ -514,7 +655,7 @@ async def get_recommendations():
         if len(top) == 5:
             break
 
-    # Precio en tiempo real (Finnhub)
+    # ── 8. Precio RT (Finnhub) ────────────────────────────────────────────────
     for r in top:
         try:
             q = await get_finnhub_quote(r["ticker"])
@@ -526,8 +667,20 @@ async def get_recommendations():
         except Exception:
             pass
 
-    # Guardar para historial
     save_recommendations(top)
+
+    # ── 9. Guardar caché ──────────────────────────────────────────────────────
+    try:
+        sp500_save, _ = await get_stooq_price("^spx")
+        with open(CACHE_FILE, "w") as f:
+            json.dump({
+                "timestamp": datetime.now().isoformat(),
+                "sp500": sp500_save,
+                "recs": top,
+                "macro_lines": macro_lines,
+            }, f, default=str)
+    except Exception:
+        pass
 
     return top, macro_lines
 
@@ -551,14 +704,17 @@ def format_recommendations(recs, macro_lines=None, titulo="Recomendaciones corto
     for i, r in enumerate(recs, 1):
         change   = f"({r['change']:+.2f}%)" if r.get("change") is not None else ""
         stop     = r.get("stop", r["price"] * 0.97)
-        stop_pct = ((r["price"] - stop) / r["price"]) * 100
+        risk     = r["price"] - stop
+        stop_pct = (risk / r["price"]) * 100
+        target   = r["price"] + 2 * risk
+        tgt_pct  = (target - r["price"]) / r["price"] * 100
         sector   = f" [{r['sector']}]" if r.get("sector") else ""
 
         lines.append(f"\n{i}. {r['ticker']}{sector}")
         lines.append(f"   ${r['price']:,.2f} {change} | RSI {r['rsi']:.0f} | Score {r['score']}")
 
         if r.get("tech_signals"):
-            lines.append("   TÉCNICO:")
+            lines.append("   TECNICO:")
             for s in r["tech_signals"]:
                 lines.append(f"   • {s}")
 
@@ -575,7 +731,10 @@ def format_recommendations(recs, macro_lines=None, titulo="Recomendaciones corto
         if r.get("news_label"):
             lines.append(f"   NOTICIAS: {r['news_label']}")
 
-        lines.append(f"   Entrada: ~${r['price']:,.2f} | Stop: ~${stop:,.2f} (-{stop_pct:.1f}%)")
+        lines.append(
+            f"   Stop: ${stop:,.2f} (-{stop_pct:.1f}%) | "
+            f"Target: ${target:,.2f} (+{tgt_pct:.1f}%) | R:R 2:1"
+        )
         lines.append("   " + "─"*24)
 
     lines.append("\nAviso: no es asesoramiento financiero.")
@@ -583,7 +742,7 @@ def format_recommendations(recs, macro_lines=None, titulo="Recomendaciones corto
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# 10. ALERTAS DE NOTICIAS
+# 11. ALERTAS DE NOTICIAS
 # ════════════════════════════════════════════════════════════════════════════
 
 async def check_news_alerts():
@@ -633,7 +792,7 @@ async def check_news_alerts():
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# 11. HELPERS DE PRECIOS
+# 12. HELPERS DE PRECIOS
 # ════════════════════════════════════════════════════════════════════════════
 
 async def get_finnhub_quote(ticker):
@@ -700,7 +859,7 @@ async def get_social_sentiment_only(ticker):
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# 12. COMANDOS
+# 13. COMANDOS
 # ════════════════════════════════════════════════════════════════════════════
 
 @dp.message(Command("start"))
@@ -708,12 +867,13 @@ async def start(message: types.Message):
     await message.answer(
         "Hola! Soy tu analista de mercados.\n\n"
         "Comandos:\n"
-        "/analisis — Índices y Bitcoin en tiempo real\n"
+        "/analisis — Indices y Bitcoin en tiempo real\n"
         "/macro — VIX, DXY, yields y contexto macro\n"
         "/precio TICKER — Precio en tiempo real\n"
-        "/acciones — Top 5 (técnico+macro+social+insiders+opciones)\n"
+        "/acciones — Top 5 (tecnico+macro+social+insiders+opciones)\n"
+        "/sectores — Mapa de rendimiento por sector\n"
         "/sentimiento TICKER — Sentimiento social completo\n"
-        "/noticias — Titulares de mercado y geopolítica\n"
+        "/noticias — Titulares de mercado y geopolitica\n"
         "/rendimiento — Historial de recomendaciones anteriores\n"
         "/suscribir — Alertas diarias 9:30 AM NY + alertas noticias\n"
         "/cancelar — Cancelar alertas"
@@ -753,11 +913,37 @@ async def analisis(message: types.Message):
 async def acciones(message: types.Message):
     await message.answer(
         f"Analizando {len(STOCKS)} acciones...\n"
-        "Técnico + macro + semanal + insiders + opciones + sentimiento\n"
-        "Espera 2-3 minutos."
+        "Tecnico + macro + semanal + insiders + opciones + sentimiento\n"
+        "Espera 2-3 min (o datos desde cache si hay analisis reciente)."
     )
     recs, macro_lines = await get_recommendations()
     await message.answer(format_recommendations(recs, macro_lines))
+
+@dp.message(Command("sectores"))
+async def sectores(message: types.Message):
+    await message.answer("Calculando rendimiento por sector...")
+    perf = await get_sector_performance()
+    if not perf:
+        await message.answer("No se pudieron obtener datos de sectores.")
+        return
+
+    sorted_s = sorted(perf.items(), key=lambda x: x[1], reverse=True)
+    lines    = [
+        "Sectores — Rendimiento hoy:",
+        datetime.now().strftime("%d/%m/%Y %H:%M"),
+        "━" * 30,
+    ]
+    for name, chg in sorted_s:
+        sign  = "+" if chg >= 0 else ""
+        arrow = "+" if chg > 0.1 else "-" if chg < -0.1 else " "
+        bars  = "#" * min(int(abs(chg) * 3), 9)
+        lines.append(f"[{arrow}] {name:<14} {sign}{chg:.2f}%  {bars}")
+
+    best  = sorted_s[0][0]  if sorted_s else "-"
+    worst = sorted_s[-1][0] if sorted_s else "-"
+    lines.append("━" * 30)
+    lines.append(f"Fuerte: {best}  |  Debil: {worst}")
+    await message.answer("\n".join(lines))
 
 @dp.message(Command("precio"))
 async def precio(message: types.Message):
@@ -766,13 +952,13 @@ async def precio(message: types.Message):
         await message.answer("Uso: /precio TICKER  Ej: /precio AAPL"); return
     q = await get_finnhub_quote(parts[1].upper())
     if not q:
-        await message.answer(f"No se encontró {parts[1].upper()}."); return
+        await message.answer(f"No se encontro {parts[1].upper()}."); return
     t = parts[1].upper()
     await message.answer(
         f"{t} — Tiempo real\n\n"
         f"• Precio:     ${q['price']:,.2f}  ({q['change']:+.2f}%)\n"
         f"• Apertura:   ${q['open']:,.2f}\n"
-        f"• Máx/Mín:    ${q['high']:,.2f} / ${q['low']:,.2f}\n"
+        f"• Max/Min:    ${q['high']:,.2f} / ${q['low']:,.2f}\n"
         f"• Cierre ant: ${q['prev']:,.2f}\n"
     )
 
@@ -814,7 +1000,7 @@ async def noticias(message: types.Message):
         for t in news["mercado"]: lines.append(f"• {t}")
     lines.append("")
     if news.get("geopolitica"):
-        lines.append("Geopolítica:")
+        lines.append("Geopolitica:")
         for t in news["geopolitica"]: lines.append(f"• {t}")
     await message.answer("\n".join(lines) if len(lines) > 2 else "Sin noticias.")
 
@@ -829,7 +1015,7 @@ async def suscribir(message: types.Message):
     subscribers.add(message.chat.id)
     await message.answer(
         "Suscrito.\n\n"
-        "Recibirás:\n"
+        "Recibiras:\n"
         "• Recomendaciones diarias a las 9:30 AM (hora NY)\n"
         "• Alertas inmediatas de noticias de alto impacto"
     )
@@ -837,18 +1023,18 @@ async def suscribir(message: types.Message):
 @dp.message(Command("cancelar"))
 async def cancelar(message: types.Message):
     subscribers.discard(message.chat.id)
-    await message.answer("Suscripción cancelada.")
+    await message.answer("Suscripcion cancelada.")
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# 13. JOBS PROGRAMADOS
+# 14. JOBS PROGRAMADOS
 # ════════════════════════════════════════════════════════════════════════════
 
 async def send_daily_recommendations():
     if not subscribers:
         return
-    recs, macro_lines = await get_recommendations()
-    msg = format_recommendations(recs, macro_lines, titulo="Recomendaciones del día")
+    recs, macro_lines = await get_recommendations(force_refresh=True)
+    msg = format_recommendations(recs, macro_lines, titulo="Recomendaciones del dia")
     for chat_id in list(subscribers):
         try:
             await bot.send_message(chat_id, msg)
