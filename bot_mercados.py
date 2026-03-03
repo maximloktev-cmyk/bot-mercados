@@ -342,13 +342,13 @@ async def get_market_news():
     async with aiohttp.ClientSession() as session:
         # Noticias financieras
         url_fin = (
-            f"https://newsdata.io/api/v1/latest"
+            f"https://newsdata.io/api/1/latest"
             f"?apikey={NEWSDATA_KEY}&language=en&category=business"
             f"&q=stocks+market+earnings&size=5"
         )
         # Noticias geopolíticas
         url_geo = (
-            f"https://newsdata.io/api/v1/latest"
+            f"https://newsdata.io/api/1/latest"
             f"?apikey={NEWSDATA_KEY}&language=en&category=politics,world"
             f"&q=Ukraine+Russia+Taiwan+OPEC+Fed+rates&size=5"
         )
