@@ -228,14 +228,21 @@ async def get_recommendations():
 
     ranked = sorted(results, key=lambda x: x["score"], reverse=True)
 
-    # Enriquecer top 15 candidatos con sentiment de Finnhub
+    # Enriquecer top 15 candidatos con sentiment (Finnhub + StockTwits + Reddit)
     candidates = ranked[:15]
-    sentiment_tasks = [get_finnhub_sentiment(r["ticker"]) for r in candidates]
-    sentiments = await asyncio.gather(*sentiment_tasks)
-    for r, (sent_score, sent_label) in zip(candidates, sentiments):
-        r["score"] += sent_score
-        if sent_label:
-            r["signals"].append(sent_label)
+    finnhub_tasks = [get_finnhub_sentiment(r["ticker"]) for r in candidates]
+    social_tasks  = [get_social_sentiment(r["ticker"])  for r in candidates]
+    finnhub_results, social_results = await asyncio.gather(
+        asyncio.gather(*finnhub_tasks),
+        asyncio.gather(*social_tasks)
+    )
+    for r, (fh_score, fh_label), (soc_score, soc_labels) in zip(
+        candidates, finnhub_results, social_results
+    ):
+        r["score"] += fh_score + soc_score
+        if fh_label:
+            r["signals"].append(fh_label)
+        r["signals"].extend(soc_labels)
 
     # Re-ordenar con sentiment incluido
     candidates = sorted(candidates, key=lambda x: x["score"], reverse=True)
@@ -315,6 +322,86 @@ async def get_finnhub_quote(ticker):
                 "open":    d["o"],
                 "prev":    d["pc"],
             }
+
+
+async def get_stocktwits_sentiment(ticker):
+    """Sentimiento bullish/bearish de StockTwits + detección de buzz"""
+    url = f"https://api.stocktwits.com/api/2/streams/symbol/{ticker}.json"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=HEADERS) as r:
+                if r.status != 200:
+                    return None
+                d = await r.json()
+                messages = d.get("messages", [])
+                if not messages:
+                    return None
+                bullish = sum(
+                    1 for m in messages
+                    if m.get("entities", {}).get("sentiment", {}) and
+                    m["entities"]["sentiment"].get("basic") == "Bullish"
+                )
+                bearish = sum(
+                    1 for m in messages
+                    if m.get("entities", {}).get("sentiment", {}) and
+                    m["entities"]["sentiment"].get("basic") == "Bearish"
+                )
+                total  = bullish + bearish
+                count  = len(messages)
+                bull_pct = (bullish / total * 100) if total > 0 else 50
+                return {"bullish": bullish, "bearish": bearish,
+                        "bull_pct": bull_pct, "count": count, "total": total}
+    except Exception:
+        return None
+
+
+async def get_reddit_mentions(ticker):
+    """Menciones en r/wallstreetbets y r/stocks en las últimas 24h"""
+    url = (
+        f"https://www.reddit.com/r/wallstreetbets+stocks+investing"
+        f"/search.json?q={ticker}&sort=new&limit=25&t=day"
+    )
+    headers = {**HEADERS, "User-Agent": "MarketBot/1.0"}
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers) as r:
+                d = await r.json()
+                posts   = d.get("data", {}).get("children", [])
+                upvotes = sum(p["data"].get("score", 0) for p in posts)
+                return len(posts), upvotes
+    except Exception:
+        return 0, 0
+
+
+async def get_social_sentiment(ticker):
+    """Combina StockTwits + Reddit y retorna (score_ajuste, señales)"""
+    st, (reddit_posts, reddit_upvotes) = await asyncio.gather(
+        get_stocktwits_sentiment(ticker),
+        get_reddit_mentions(ticker)
+    )
+    score  = 0
+    labels = []
+
+    if st and st["total"] >= 5:
+        if st["bull_pct"] >= 65:
+            score += 2
+            labels.append(f"StockTwits {st['bull_pct']:.0f}% alcista ({st['bullish']}/{st['total']})")
+        elif st["bull_pct"] <= 35:
+            score -= 2
+            labels.append(f"StockTwits {100 - st['bull_pct']:.0f}% bajista")
+
+        # Buzz inusual: muchos mensajes muy direccionales
+        if st["count"] >= 20 and (st["bull_pct"] >= 70 or st["bull_pct"] <= 30):
+            score += 1
+            labels.append(f"Buzz inusual en StockTwits ({st['count']} msgs)")
+
+    if reddit_posts >= 5:
+        score += 1
+        labels.append(f"Trending en Reddit ({reddit_posts} posts, {reddit_upvotes} upvotes)")
+    elif reddit_posts >= 3:
+        labels.append(f"Menciones en Reddit ({reddit_posts} posts)")
+
+    return score, labels
 
 
 async def get_finnhub_sentiment(ticker):
@@ -404,6 +491,7 @@ async def start(message: types.Message):
         "/analisis — Índices y Bitcoin en tiempo real\n"
         "/precio TICKER — Precio en tiempo real de cualquier acción\n"
         "/acciones — Top 5 recomendaciones ahora\n"
+        "/sentimiento TICKER — Sentimiento social (StockTwits + Reddit)\n"
         "/noticias — Titulares de mercado y geopolítica\n"
         "/suscribir — Alertas diarias a las 9:30 AM NY\n"
         "/cancelar — Cancelar alertas"
@@ -461,6 +549,52 @@ async def precio(message: types.Message):
         f"• Máx/Mín:   ${q['high']:,.2f} / ${q['low']:,.2f}\n"
         f"• Cierre ant: ${q['prev']:,.2f}\n"
     )
+
+
+@dp.message(Command("sentimiento"))
+async def sentimiento(message: types.Message):
+    parts = message.text.strip().split()
+    if len(parts) < 2:
+        await message.answer("Uso: /sentimiento TICKER\nEjemplo: /sentimiento NVDA")
+        return
+    ticker = parts[1].upper()
+    await message.answer(f"Analizando sentimiento social de {ticker}...")
+
+    (fh_score, fh_label), (soc_score, soc_labels), quote = await asyncio.gather(
+        get_finnhub_sentiment(ticker),
+        get_social_sentiment(ticker),
+        get_finnhub_quote(ticker)
+    )
+
+    lines = [f"Sentimiento social — {ticker}\n"]
+
+    if quote:
+        lines.append(f"Precio actual: ${quote['price']:,.2f} ({quote['change']:+.2f}%)\n")
+
+    # Finnhub
+    if fh_label:
+        lines.append(f"Noticias (Finnhub):\n• {fh_label}\n")
+    else:
+        lines.append("Noticias (Finnhub): neutro\n")
+
+    # StockTwits + Reddit
+    if soc_labels:
+        lines.append("Redes sociales:")
+        for l in soc_labels:
+            lines.append(f"• {l}")
+    else:
+        lines.append("Redes sociales: sin señal clara")
+
+    score_total = fh_score + soc_score
+    if score_total >= 2:
+        resumen = "Sentimiento POSITIVO"
+    elif score_total <= -2:
+        resumen = "Sentimiento NEGATIVO"
+    else:
+        resumen = "Sentimiento NEUTRO"
+
+    lines.append(f"\nResumen: {resumen} (score {score_total:+d})")
+    await message.answer("\n".join(lines))
 
 
 @dp.message(Command("noticias"))
