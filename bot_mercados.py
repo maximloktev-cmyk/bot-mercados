@@ -380,8 +380,8 @@ async def check_news_alerts():
         return
     url = (
         f"https://newsdata.io/api/1/latest"
-        f"?apikey={NEWSDATA_KEY}&language=es,en"
-        f"&category=business,politics,world&size=10"
+        f"?apikey={NEWSDATA_KEY}&language=en"
+        f"&country=us&category=business,politics,world&size=10"
     )
     try:
         async with aiohttp.ClientSession() as session:
@@ -402,17 +402,24 @@ async def check_news_alerts():
             if not matched:
                 continue
 
-            # Detectar acciones afectadas
-            text_up  = f"{title} {desc}".upper()
-            affected = [t for t in STOCKS if f" {t} " in f" {text_up} "]
+            # Detectar acciones afectadas (solo tickers de 3+ letras para evitar falsos positivos)
+            text_up  = f" {title} {desc} ".upper()
+            affected = [
+                t for t in STOCKS
+                if len(t) >= 3 and f" {t} " in text_up or f"${t}" in text_up
+            ]
 
-            msg = (
-                f"ALERTA DE MERCADO\n\n"
-                f"{title}\n\n"
-                f"{desc[:280]}...\n\n" if desc else f"ALERTA DE MERCADO\n\n{title}\n\n"
-            )
+            # Solo enviar si menciona un ticker conocido O son keywords muy críticos
+            critical = ["fed decision", "rate hike", "rate cut", "opec", "ukraine", "taiwan", "nuclear"]
+            is_critical = any(kw in text for kw in critical)
+            if not affected and not is_critical:
+                continue
+
+            msg = f"ALERTA DE MERCADO\n\n{title}\n\n"
+            if desc:
+                msg += f"{desc[:280]}...\n\n"
             if affected:
-                msg += f"Acciones posiblemente afectadas: {', '.join(affected[:6])}\n"
+                msg += f"Acciones afectadas: {', '.join(affected[:6])}\n"
             msg += f"Palabras clave: {', '.join(matched[:3])}"
 
             sent_articles.add(art_id)
@@ -445,8 +452,8 @@ async def get_market_news():
     results = {}
     async with aiohttp.ClientSession() as session:
         for key, params in [
-            ("mercado",    "language=es&category=business&q=bolsa+mercado+acciones&size=5"),
-            ("geopolitica","language=es&category=politics,world&q=Ucrania+Rusia+Taiwan+OPEP+Fed&size=5"),
+            ("mercado",    "language=en&country=us&category=business&q=stocks+market+earnings&size=5"),
+            ("geopolitica","language=en&category=politics,world&q=Ukraine+Russia+Taiwan+OPEC+Fed+rates&size=5"),
         ]:
             try:
                 url = f"https://newsdata.io/api/1/latest?apikey={NEWSDATA_KEY}&{params}"
