@@ -343,14 +343,14 @@ async def get_market_news():
         # Noticias financieras
         url_fin = (
             f"https://newsdata.io/api/1/latest"
-            f"?apikey={NEWSDATA_KEY}&language=en&category=business"
-            f"&q=stocks+market+earnings&size=5"
+            f"?apikey={NEWSDATA_KEY}&language=es&category=business"
+            f"&q=bolsa+mercado+acciones&size=5"
         )
         # Noticias geopolíticas
         url_geo = (
             f"https://newsdata.io/api/1/latest"
-            f"?apikey={NEWSDATA_KEY}&language=en&category=politics,world"
-            f"&q=Ukraine+Russia+Taiwan+OPEC+Fed+rates&size=5"
+            f"?apikey={NEWSDATA_KEY}&language=es&category=politics,world"
+            f"&q=Ucrania+Rusia+Taiwan+OPEP+Fed+tasas&size=5"
         )
         try:
             async with session.get(url_fin, headers=HEADERS) as r:
