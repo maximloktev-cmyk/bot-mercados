@@ -10,106 +10,89 @@ TOKEN         = os.environ.get("BOT_TOKEN",     "8616657604:AAGQI9e_x9ZX5zw6zcHI
 FINNHUB_KEY   = os.environ.get("FINNHUB_KEY",   "d6j133pr01qleu95u19gd6j133pr01qleu95u1a0")
 NEWSDATA_KEY  = os.environ.get("NEWSDATA_KEY",  "pub_4cbb2798d21e439186e168313963b1bb")
 
-bot = Bot(token=TOKEN)
-dp = Dispatcher()
+bot       = Bot(token=TOKEN)
+dp        = Dispatcher()
 scheduler = AsyncIOScheduler(timezone="America/New_York")
 
-HEADERS = {"User-Agent": "Mozilla/5.0"}
-subscribers = set()
+HEADERS       = {"User-Agent": "Mozilla/5.0"}
+subscribers   = set()
+sent_articles = set()   # evitar enviar la misma alerta dos veces
 
-# ── Sectores con viento geopolítico a favor (marzo 2026) ────────────────────
-# IA/Semis: boom de IA, gasto masivo en infraestructura
-# Defensa: tensiones Rusia-Ucrania, Mar Rojo, Taiwan
-# Cripto: Bitcoin en máximos históricos, regulación favorable en EE.UU.
-# Energía: tensiones Oriente Medio, sanciones Rusia
+# ── Palabras clave de noticias de alto impacto ───────────────────────────────
+IMPACT_KEYWORDS = [
+    "earnings beat", "earnings miss", "supera estimaciones", "resultados record",
+    "acquisition", "merger", "adquisición", "fusión", "compra por",
+    "fda approval", "aprobación fda", "fda rejects",
+    "bankruptcy", "quiebra", "chapter 11",
+    "layoffs", "despidos", "recorte de empleos",
+    "rate hike", "rate cut", "subida de tipos", "bajada de tipos",
+    "fed decision", "decisión fed", "powell",
+    "opec", "opep", "recorte de producción", "aumento de producción",
+    "ukraine", "ucrania", "taiwan", "taiwán", "sanctions", "sanciones",
+    "nuclear", "war escalation", "escalada",
+    "stock split", "división de acciones",
+    "buyback", "recompra de acciones",
+    "revenue guidance", "previsión ingresos", "profit warning",
+    "sec investigation", "investigación sec", "fraud", "fraude",
+]
+
+# ── Sectores con viento geopolítico a favor ──────────────────────────────────
 SECTOR_BOOST = {
-    "NVDA": ("IA/Semis", 2),  "AMD":  ("IA/Semis", 2),  "AVGO": ("IA/Semis", 2),
+    "NVDA": ("IA/Semis", 2),  "AMD":  ("IA/Semis", 2),  "AVBO": ("IA/Semis", 2),
     "MU":   ("IA/Semis", 2),  "SMCI": ("IA/Semis", 2),  "AMAT": ("IA/Semis", 1),
     "LRCX": ("IA/Semis", 1),  "KLAC": ("IA/Semis", 1),  "QCOM": ("IA/Semis", 1),
+    "AVGO": ("IA/Semis", 2),
     "MSFT": ("IA/Cloud", 1),  "GOOGL":("IA/Cloud", 1),  "META": ("IA/Cloud", 1),
     "AMZN": ("IA/Cloud", 1),  "CRM":  ("IA/Cloud", 1),  "PLTR": ("IA/Cloud", 2),
     "LMT":  ("Defensa", 2),   "RTX":  ("Defensa", 2),   "NOC":  ("Defensa", 2),
     "GD":   ("Defensa", 2),   "BA":   ("Defensa", 1),   "LDOS": ("Defensa", 1),
-    "HII":  ("Defensa", 1),   "AXON": ("Defensa", 1),
+    "HII":  ("Defensa", 1),   "AXON": ("Defensa", 1),   "KTOS": ("Defensa", 1),
     "COIN": ("Cripto", 2),    "MSTR": ("Cripto", 2),    "HOOD": ("Cripto", 1),
     "RIOT": ("Cripto", 1),    "MARA": ("Cripto", 1),
     "XOM":  ("Energía", 1),   "CVX":  ("Energía", 1),   "OXY":  ("Energía", 1),
-    "SLB":  ("Energía", 1),   "HAL":  ("Energía", 1),
+    "SLB":  ("Energía", 1),   "HAL":  ("Energía", 1),   "VLO":  ("Energía", 1),
+    "MPC":  ("Energía", 1),   "PSX":  ("Energía", 1),
 }
 
-
-# ── Universo de acciones ────────────────────────────────────────────────────
-
+# ── Universo de acciones (~250 tickers) ─────────────────────────────────────
 STOCKS = list(set([
-    # IA / Semiconductores
-    "NVDA", "AMD", "AVGO", "QCOM", "MU", "INTC", "AMAT", "LRCX", "KLAC",
-    "MRVL", "NXPI", "ON", "TXN", "SMCI", "IONQ", "RKLB", "WOLF", "ENPH",
-    "SWKS", "MPWR", "ENTG", "ONTO", "ACLS", "COHU", "AMBA", "SLAB",
-    # Big Tech / Cloud / Software
-    "AAPL", "MSFT", "GOOGL", "AMZN", "META", "TSLA", "ORCL", "IBM",
-    "CRM", "ADBE", "NOW", "INTU", "SNPS", "CDNS", "PLTR", "WDAY",
-    "TEAM", "DDOG", "ZS", "CRWD", "NET", "OKTA", "MDB", "SNOW",
-    "ZM", "DOCU", "BILL", "HUBS", "SMAR", "GTLB", "ESTC", "APPN",
-    "CFLT", "DXCM", "VEEV", "COUP", "PAYC", "PCTY", "SAIC", "CACI",
-    # Fintech / Financiero
-    "V", "MA", "PYPL", "SQ", "AFRM", "SOFI", "HOOD", "COIN",
-    "JPM", "BAC", "GS", "MS", "WFC", "C", "AXP", "BLK", "SCHW",
-    "USB", "PNC", "TFC", "COF", "DFS", "SYF", "ALLY", "LC",
-    "ICE", "CME", "CBOE", "NDAQ", "MKTX", "LPLA", "RJF", "SF",
-    "BX", "KKR", "APO", "CG", "ARES", "OWL",
-    # Defensa / Aeroespacial
-    "LMT", "RTX", "NOC", "GD", "BA", "HII", "LDOS", "AXON",
-    "L3H", "TDG", "HEI", "KTOS", "RCAT", "ACHR", "JOBY",
-    # Energía
-    "XOM", "CVX", "OXY", "SLB", "HAL", "COP", "EOG", "MPC", "VLO", "PSX",
-    "PXD", "DVN", "FANG", "MRO", "HES", "APA", "NOV", "BKR",
-    "KMI", "WMB", "OKE", "ET", "MPLX", "EPD",
-    # Salud / Biotech / Pharma
-    "UNH", "JNJ", "PFE", "ABBV", "MRK", "LLY", "BMY", "AMGN", "GILD",
-    "REGN", "VRTX", "MRNA", "BIIB", "DXCM", "ISRG", "BSX", "EW",
-    "ZBH", "SYK", "MDT", "ABT", "BAX", "BDX", "IQV", "CRL",
-    "ILMN", "PACB", "NVAX", "BNTX", "ARWR", "BEAM", "EDIT", "NTLA",
-    "RXRX", "CRVS", "ACAD", "SAGE", "SRTX", "PTGX",
-    # Consumo Discrecional
-    "WMT", "COST", "HD", "TGT", "NKE", "SBUX", "MCD", "DIS",
-    "NFLX", "ABNB", "BKNG", "MAR", "HLT", "LVS", "MGM", "WYNN",
-    "F", "GM", "RIVN", "LCID", "RACE", "TM",
-    "LOW", "BBY", "ETSY", "W", "CHWY", "CHEWY",
-    "PG", "KO", "PEP", "PM", "MO", "MDLZ", "CL", "KMB", "CHD",
-    # Retail / E-commerce
-    "EBAY", "MELI", "SE", "CPNG", "SHOP",
-    # Cripto / Blockchain
-    "MSTR", "RIOT", "MARA", "CLSK", "BTBT", "HUT", "CIFR",
-    # Industriales / Manufactura
-    "CAT", "DE", "HON", "MMM", "GE", "ETN", "EMR", "PH", "ROK", "IR",
-    "ITW", "DOV", "AME", "ROP", "FTV", "FBHS", "XYL", "IDEX", "IEX",
-    "GWW", "MSC", "FAST", "SWK", "PNR", "GNRC",
-    # Transporte / Logística
-    "UPS", "FDX", "DAL", "UAL", "AAL", "LUV", "JBLU", "ALK",
-    "CSX", "NSC", "UNP", "CP", "CNI",
-    # Real Estate / REIT
-    "AMT", "PLD", "CCI", "EQIX", "DLR", "SPG", "O", "VICI",
-    # Utilities
-    "NEE", "DUK", "SO", "AEP", "EXC", "SRE", "PCG", "ED",
-    # Telecom / Media
-    "T", "VZ", "TMUS", "CHTR", "CMCSA", "PARA", "WBD",
-    # Materiales
-    "LIN", "APD", "ECL", "DD", "DOW", "NUE", "STLD", "RS",
-    "FCX", "NEM", "AEM", "GOLD", "WPM", "AA", "ALB", "MP",
-    # ETFs
-    "SPY", "QQQ", "IWM", "XLK", "XLF", "XLE", "XLV", "XLI",
-    "XLB", "XLU", "XLRE", "XLY", "XLP", "GLD", "SLV", "USO",
-    "ARKK", "ARKG", "ARKW",
+    "NVDA","AMD","AVGO","QCOM","MU","INTC","AMAT","LRCX","KLAC","MRVL","NXPI",
+    "ON","TXN","SMCI","IONQ","RKLB","WOLF","ENPH","SWKS","MPWR","ENTG","AMBA",
+    "AAPL","MSFT","GOOGL","AMZN","META","TSLA","ORCL","IBM","CRM","ADBE","NOW",
+    "INTU","SNPS","CDNS","PLTR","WDAY","TEAM","DDOG","ZS","CRWD","NET","OKTA",
+    "MDB","SNOW","ZM","DOCU","BILL","HUBS","GTLB","ESTC","CFLT","VEEV","PAYC",
+    "PCTY","CACI","SAIC",
+    "V","MA","PYPL","SQ","AFRM","SOFI","HOOD","COIN","JPM","BAC","GS","MS",
+    "WFC","C","AXP","BLK","SCHW","USB","PNC","TFC","COF","DFS","SYF","ALLY",
+    "ICE","CME","CBOE","BX","KKR","APO","ARES",
+    "LMT","RTX","NOC","GD","BA","HII","LDOS","AXON","KTOS","TDG","HEI",
+    "XOM","CVX","OXY","SLB","HAL","COP","EOG","MPC","VLO","PSX","DVN",
+    "MRO","HES","APA","BKR","KMI","WMB","OKE",
+    "UNH","JNJ","PFE","ABBV","MRK","LLY","BMY","AMGN","GILD","REGN","VRTX",
+    "MRNA","BIIB","ISRG","BSX","EW","SYK","MDT","ABT","BDX","IQV",
+    "ILMN","NVAX","BNTX","ARWR","RXRX",
+    "WMT","COST","HD","TGT","NKE","SBUX","MCD","DIS","NFLX","ABNB","BKNG",
+    "MAR","HLT","LVS","MGM","F","GM","RIVN","LOW","ETSY","SHOP","MELI",
+    "PG","KO","PEP","PM","MO","MDLZ","CL",
+    "MSTR","RIOT","MARA","CLSK","BTBT",
+    "CAT","DE","HON","MMM","GE","ETN","EMR","PH","ROK","ITW","DOV","AME",
+    "ROP","GWW","FAST","SWK","GNRC",
+    "UPS","FDX","DAL","UAL","CSX","NSC","UNP",
+    "AMT","PLD","EQIX","DLR","SPG","O",
+    "NEE","DUK","SO","AEP","EXC",
+    "T","VZ","TMUS","CMCSA",
+    "LIN","FCX","NEM","GOLD","ALB","MP","AA",
+    "SPY","QQQ","IWM","XLK","XLF","XLE","XLV","XLI","ARKK",
 ]))
 
 
-# ── Indicadores técnicos ────────────────────────────────────────────────────
+# ── Indicadores técnicos ─────────────────────────────────────────────────────
 
 def calc_rsi(closes, period=14):
     delta = closes.diff()
-    gain = delta.clip(lower=0).rolling(period).mean()
-    loss = (-delta.clip(upper=0)).rolling(period).mean()
-    rs = gain / loss
+    gain  = delta.clip(lower=0).rolling(period).mean()
+    loss  = (-delta.clip(upper=0)).rolling(period).mean()
+    rs    = gain / loss
     return (100 - (100 / (1 + rs))).iloc[-1]
 
 
@@ -128,84 +111,169 @@ def analyze_stock(ticker, df):
         if len(closes) < 50:
             return None
 
-        price     = float(closes.iloc[-1])
-        prev      = float(closes.iloc[-2])
-        rsi       = calc_rsi(closes)
+        price    = float(closes.iloc[-1])
+        prev     = float(closes.iloc[-2])
+        rsi      = calc_rsi(closes)
         macd_now, macd_prev, sig_now, sig_prev = calc_macd(closes)
-        high_20d  = float(closes.iloc[-21:-1].max())
-        low_20d   = float(closes.iloc[-21:-1].min())
-        sma20     = float(closes.iloc[-20:].mean())
-        sma50     = float(closes.iloc[-50:].mean())
-        vol_avg   = float(volumes.iloc[-21:-1].mean())
-        vol_now   = float(volumes.iloc[-1])
+        high_20d = float(closes.iloc[-21:-1].max())
+        low_20d  = float(closes.iloc[-21:-1].min())
+        sma20    = float(closes.iloc[-20:].mean())
+        sma50    = float(closes.iloc[-50:].mean())
+        vol_avg  = float(volumes.iloc[-21:-1].mean())
+        vol_now  = float(volumes.iloc[-1])
 
-        # ── Filtros obligatorios ────────────────────────────────────────────
-        if rsi >= 70:          return None   # sobrecomprado, no entrar
-        if price < sma20:      return None   # sin tendencia alcista corto plazo
-        if price < sma50 * 0.97: return None # muy por debajo de media larga
+        # Filtros obligatorios
+        if rsi >= 70:             return None
+        if price < sma20:         return None
+        if price < sma50 * 0.97:  return None
 
-        score   = 0
-        signals = []
+        score        = 0
+        tech_signals = []
         sector_label = ""
 
-        # ── Señales técnicas ────────────────────────────────────────────────
-
-        # RSI favorable
         if rsi < 35:
             score += 2
-            signals.append(f"RSI {rsi:.0f} — rebote desde sobreventa")
+            tech_signals.append(f"RSI {rsi:.0f} — rebote desde sobreventa")
         elif 45 <= rsi <= 63:
             score += 1
-            signals.append(f"RSI {rsi:.0f} — momentum saludable")
+            tech_signals.append(f"RSI {rsi:.0f} — momentum saludable")
 
-        # MACD cruce alcista
         if macd_prev < sig_prev and macd_now > sig_now:
             score += 3
-            signals.append("MACD cruce alcista confirmado")
+            tech_signals.append("MACD cruce alcista")
 
-        # Rotura de resistencia (máximo 20 días) con cierre
         if price > high_20d:
             score += 3
-            signals.append(f"Rotura resistencia ${high_20d:.2f}")
+            tech_signals.append(f"Rotura resistencia ${high_20d:.2f}")
 
-        # Rebote en soporte con recuperación
         if prev <= low_20d * 1.005 and price > prev * 1.005:
             score += 2
-            signals.append(f"Rebote en soporte ${low_20d:.2f}")
+            tech_signals.append(f"Rebote en soporte ${low_20d:.2f}")
 
-        # Precio sobre ambas medias móviles (tendencia sólida)
         if price > sma20 and price > sma50:
             score += 1
-            signals.append(f"Sobre SMA20 y SMA50")
+            tech_signals.append("Precio sobre SMA20 y SMA50")
 
-        # Volumen elevado (confirma movimiento)
         if vol_avg > 0 and vol_now > vol_avg * 1.5:
             score += 2
-            signals.append(f"Volumen {vol_now/vol_avg:.1f}x — señal fuerte")
+            tech_signals.append(f"Volumen {vol_now/vol_avg:.1f}x promedio")
 
-        # ── Boost geopolítico ────────────────────────────────────────────────
         if ticker in SECTOR_BOOST:
-            label, boost = SECTOR_BOOST[ticker]
-            sector_label = label
+            sector_label, boost = SECTOR_BOOST[ticker]
             score += boost
-            signals.append(f"Sector favorecido: {label}")
 
-        # ── Filtro mínimo: al menos 2 señales técnicas reales ────────────────
-        tech_signals = [s for s in signals if "Sector" not in s and "SMA" not in s]
         if len(tech_signals) < 2 or score < 4:
             return None
 
+        # Stop loss sugerido: bajo de 20d o SMA20, lo que esté más cerca del precio
+        stop = max(low_20d, sma20 * 0.98)
+
         return {
-            "ticker":  ticker,
-            "score":   score,
-            "signals": signals,
-            "price":   price,
-            "rsi":     rsi,
-            "sector":  sector_label,
+            "ticker":       ticker,
+            "score":        score,
+            "tech_signals": tech_signals,
+            "social":       [],
+            "news_label":   None,
+            "price":        price,
+            "rsi":          rsi,
+            "sector":       sector_label,
+            "stop":         stop,
+            "high_20d":     high_20d,
         }
     except Exception:
         return None
 
+
+# ── Sentiment ────────────────────────────────────────────────────────────────
+
+async def get_stocktwits_sentiment(ticker):
+    url = f"https://api.stocktwits.com/api/2/streams/symbol/{ticker}.json"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=HEADERS) as r:
+                if r.status != 200:
+                    return None
+                d        = await r.json()
+                messages = d.get("messages", [])
+                bullish  = sum(1 for m in messages
+                               if m.get("entities", {}).get("sentiment", {}) and
+                               m["entities"]["sentiment"].get("basic") == "Bullish")
+                bearish  = sum(1 for m in messages
+                               if m.get("entities", {}).get("sentiment", {}) and
+                               m["entities"]["sentiment"].get("basic") == "Bearish")
+                total    = bullish + bearish
+                count    = len(messages)
+                bull_pct = (bullish / total * 100) if total > 0 else 50
+                return {"bull_pct": bull_pct, "count": count, "total": total,
+                        "bullish": bullish, "bearish": bearish}
+    except Exception:
+        return None
+
+
+async def get_reddit_mentions(ticker):
+    url = (f"https://www.reddit.com/r/wallstreetbets+stocks+investing"
+           f"/search.json?q={ticker}&sort=new&limit=25&t=day")
+    headers = {**HEADERS, "User-Agent": "MarketBot/1.0"}
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers) as r:
+                d       = await r.json()
+                posts   = d.get("data", {}).get("children", [])
+                upvotes = sum(p["data"].get("score", 0) for p in posts)
+                return len(posts), upvotes
+    except Exception:
+        return 0, 0
+
+
+async def get_finnhub_sentiment(ticker):
+    url = f"https://finnhub.io/api/v1/news-sentiment?symbol={ticker}&token={FINNHUB_KEY}"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=HEADERS) as r:
+                d    = await r.json()
+                sent = d.get("sentiment", {}).get("bullishPercent", 0.5)
+                if sent > 0.6:   return 2, "Noticias positivas"
+                elif sent < 0.4: return -2, "Noticias negativas"
+                return 0, None
+    except Exception:
+        return 0, None
+
+
+async def enrich_with_sentiment(r):
+    """Agrega datos de sentimiento a un resultado de análisis"""
+    ticker = r["ticker"]
+    st, (reddit_posts, reddit_upvotes), (fh_score, fh_label) = await asyncio.gather(
+        get_stocktwits_sentiment(ticker),
+        get_reddit_mentions(ticker),
+        get_finnhub_sentiment(ticker),
+    )
+    score_adj = fh_score
+
+    if fh_label:
+        r["news_label"] = fh_label
+
+    if st and st["total"] >= 5:
+        if st["bull_pct"] >= 65:
+            score_adj += 2
+            r["social"].append(f"StockTwits {st['bull_pct']:.0f}% alcista ({st['bullish']}/{st['total']})")
+        elif st["bull_pct"] <= 35:
+            score_adj -= 2
+            r["social"].append(f"StockTwits {100-st['bull_pct']:.0f}% bajista")
+        if st["count"] >= 20 and (st["bull_pct"] >= 70 or st["bull_pct"] <= 30):
+            score_adj += 1
+            r["social"].append(f"Buzz inusual ({st['count']} mensajes)")
+
+    if reddit_posts >= 5:
+        score_adj += 1
+        r["social"].append(f"Trending Reddit ({reddit_posts} posts, {reddit_upvotes:,} upvotes)")
+    elif reddit_posts >= 3:
+        r["social"].append(f"Reddit ({reddit_posts} posts)")
+
+    r["score"] += score_adj
+    return r
+
+
+# ── Recomendaciones ──────────────────────────────────────────────────────────
 
 async def get_recommendations():
     def fetch():
@@ -219,38 +287,24 @@ async def get_recommendations():
     results = []
     for ticker in STOCKS:
         try:
-            df = data[ticker].dropna()
+            df     = data[ticker].dropna()
             result = analyze_stock(ticker, df)
             if result:
                 results.append(result)
         except Exception:
             continue
 
-    ranked = sorted(results, key=lambda x: x["score"], reverse=True)
-
-    # Enriquecer top 15 candidatos con sentiment (Finnhub + StockTwits + Reddit)
+    ranked     = sorted(results, key=lambda x: x["score"], reverse=True)
     candidates = ranked[:15]
-    finnhub_tasks = [get_finnhub_sentiment(r["ticker"]) for r in candidates]
-    social_tasks  = [get_social_sentiment(r["ticker"])  for r in candidates]
-    finnhub_results, social_results = await asyncio.gather(
-        asyncio.gather(*finnhub_tasks),
-        asyncio.gather(*social_tasks)
-    )
-    for r, (fh_score, fh_label), (soc_score, soc_labels) in zip(
-        candidates, finnhub_results, social_results
-    ):
-        r["score"] += fh_score + soc_score
-        if fh_label:
-            r["signals"].append(fh_label)
-        r["signals"].extend(soc_labels)
 
-    # Re-ordenar con sentiment incluido
-    candidates = sorted(candidates, key=lambda x: x["score"], reverse=True)
+    # Enriquecer con sentiment en paralelo
+    enriched = await asyncio.gather(*[enrich_with_sentiment(r) for r in candidates])
+    enriched = sorted(enriched, key=lambda x: x["score"], reverse=True)
 
-    # Máximo 2 acciones por sector para diversificar
-    top = []
+    # Máx 2 por sector
+    top          = []
     sector_count = {}
-    for r in candidates:
+    for r in enriched:
         sector = r.get("sector") or "General"
         if sector_count.get(sector, 0) < 2:
             top.append(r)
@@ -277,35 +331,103 @@ def format_recommendations(recs, titulo="Recomendaciones corto plazo"):
     if not recs:
         return (
             "No se encontraron acciones que cumplan todos los criterios hoy.\n"
-            "El mercado puede estar en pausa o sobrecomprado en general."
+            "El mercado puede estar en pausa o sobrecomprado."
         )
 
-    context = (
-        "Contexto geopolítico considerado:\n"
-        "• IA/Semis: gasto masivo en infraestructura IA\n"
-        "• Defensa: tensiones Rusia, Mar Rojo, Taiwán\n"
-        "• Cripto: BTC en máximos, regulación favorable EE.UU.\n"
-        "• Energía: tensiones Oriente Medio\n"
-    )
-
-    lines = [f"{titulo} ({len(STOCKS)} acciones analizadas):\n", context, "─" * 30 + "\n"]
+    lines = [
+        f"{titulo} — {len(STOCKS)} acciones analizadas\n",
+        "Criterios: técnico + sentimiento + noticias + geopolítica\n",
+        "━" * 28,
+    ]
 
     for i, r in enumerate(recs, 1):
-        sigs   = "\n   • ".join(r["signals"])
         change = f"({r['change']:+.2f}%)" if r.get("change") is not None else ""
-        high   = f"  Max ${r['high']:,.2f}  Min ${r['low']:,.2f}" if r.get("high") else ""
+        stop   = r.get("stop", r["price"] * 0.97)
+        stop_pct = ((r["price"] - stop) / r["price"]) * 100
+        sector = f"  [{r['sector']}]" if r.get("sector") else ""
+
         lines.append(
-            f"{i}. {r['ticker']}  ${r['price']:,.2f} {change}  |  RSI {r['rsi']:.0f}  |  Score {r['score']}\n"
-            f"  {high}\n"
-            f"   • {sigs}\n"
+            f"\n{i}. {r['ticker']}{sector}\n"
+            f"   Precio: ${r['price']:,.2f} {change}  |  RSI {r['rsi']:.0f}  |  Score {r['score']}"
         )
 
-    lines.append("─" * 30)
-    lines.append("Aviso: no es asesoramiento financiero. Gestiona tu riesgo.")
+        lines.append("   TÉCNICO:")
+        for s in r["tech_signals"]:
+            lines.append(f"   • {s}")
+
+        if r["social"]:
+            lines.append("   SOCIAL:")
+            for s in r["social"]:
+                lines.append(f"   • {s}")
+
+        if r.get("news_label"):
+            lines.append(f"   NOTICIAS: {r['news_label']}")
+
+        lines.append(
+            f"   Entrada: ~${r['price']:,.2f}  |  Stop: ~${stop:,.2f} (-{stop_pct:.1f}%)"
+        )
+        lines.append("   " + "─" * 24)
+
+    lines.append("\nAviso: no es asesoramiento financiero.")
     return "\n".join(lines)
 
 
-# ── Helpers de precios ──────────────────────────────────────────────────────
+# ── Alertas de noticias importantes ─────────────────────────────────────────
+
+async def check_news_alerts():
+    """Revisa noticias cada 20 min y alerta si hay algo de alto impacto"""
+    if not subscribers:
+        return
+    url = (
+        f"https://newsdata.io/api/1/latest"
+        f"?apikey={NEWSDATA_KEY}&language=es,en"
+        f"&category=business,politics,world&size=10"
+    )
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=HEADERS) as r:
+                d        = await r.json()
+                articles = d.get("results", [])
+
+        for article in articles:
+            art_id = article.get("article_id") or article.get("link", "")
+            if not art_id or art_id in sent_articles:
+                continue
+
+            title = article.get("title", "")
+            desc  = article.get("description", "") or ""
+            text  = f"{title} {desc}".lower()
+
+            matched = [kw for kw in IMPACT_KEYWORDS if kw in text]
+            if not matched:
+                continue
+
+            # Detectar acciones afectadas
+            text_up  = f"{title} {desc}".upper()
+            affected = [t for t in STOCKS if f" {t} " in f" {text_up} "]
+
+            msg = (
+                f"ALERTA DE MERCADO\n\n"
+                f"{title}\n\n"
+                f"{desc[:280]}...\n\n" if desc else f"ALERTA DE MERCADO\n\n{title}\n\n"
+            )
+            if affected:
+                msg += f"Acciones posiblemente afectadas: {', '.join(affected[:6])}\n"
+            msg += f"Palabras clave: {', '.join(matched[:3])}"
+
+            sent_articles.add(art_id)
+            for chat_id in list(subscribers):
+                try:
+                    await bot.send_message(chat_id, msg)
+                except Exception:
+                    pass
+            break  # máx 1 alerta por ciclo para no spamear
+
+    except Exception:
+        pass
+
+
+# ── Helpers de precios ───────────────────────────────────────────────────────
 
 async def get_finnhub_quote(ticker):
     url = f"https://finnhub.io/api/v1/quote?symbol={ticker}&token={FINNHUB_KEY}"
@@ -314,147 +436,25 @@ async def get_finnhub_quote(ticker):
             d = await r.json()
             if not d.get("c"):
                 return None
-            return {
-                "price":   d["c"],
-                "change":  d["dp"],
-                "high":    d["h"],
-                "low":     d["l"],
-                "open":    d["o"],
-                "prev":    d["pc"],
-            }
-
-
-async def get_stocktwits_sentiment(ticker):
-    """Sentimiento bullish/bearish de StockTwits + detección de buzz"""
-    url = f"https://api.stocktwits.com/api/2/streams/symbol/{ticker}.json"
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers=HEADERS) as r:
-                if r.status != 200:
-                    return None
-                d = await r.json()
-                messages = d.get("messages", [])
-                if not messages:
-                    return None
-                bullish = sum(
-                    1 for m in messages
-                    if m.get("entities", {}).get("sentiment", {}) and
-                    m["entities"]["sentiment"].get("basic") == "Bullish"
-                )
-                bearish = sum(
-                    1 for m in messages
-                    if m.get("entities", {}).get("sentiment", {}) and
-                    m["entities"]["sentiment"].get("basic") == "Bearish"
-                )
-                total  = bullish + bearish
-                count  = len(messages)
-                bull_pct = (bullish / total * 100) if total > 0 else 50
-                return {"bullish": bullish, "bearish": bearish,
-                        "bull_pct": bull_pct, "count": count, "total": total}
-    except Exception:
-        return None
-
-
-async def get_reddit_mentions(ticker):
-    """Menciones en r/wallstreetbets y r/stocks en las últimas 24h"""
-    url = (
-        f"https://www.reddit.com/r/wallstreetbets+stocks+investing"
-        f"/search.json?q={ticker}&sort=new&limit=25&t=day"
-    )
-    headers = {**HEADERS, "User-Agent": "MarketBot/1.0"}
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers=headers) as r:
-                d = await r.json()
-                posts   = d.get("data", {}).get("children", [])
-                upvotes = sum(p["data"].get("score", 0) for p in posts)
-                return len(posts), upvotes
-    except Exception:
-        return 0, 0
-
-
-async def get_social_sentiment(ticker):
-    """Combina StockTwits + Reddit y retorna (score_ajuste, señales)"""
-    st, (reddit_posts, reddit_upvotes) = await asyncio.gather(
-        get_stocktwits_sentiment(ticker),
-        get_reddit_mentions(ticker)
-    )
-    score  = 0
-    labels = []
-
-    if st and st["total"] >= 5:
-        if st["bull_pct"] >= 65:
-            score += 2
-            labels.append(f"StockTwits {st['bull_pct']:.0f}% alcista ({st['bullish']}/{st['total']})")
-        elif st["bull_pct"] <= 35:
-            score -= 2
-            labels.append(f"StockTwits {100 - st['bull_pct']:.0f}% bajista")
-
-        # Buzz inusual: muchos mensajes muy direccionales
-        if st["count"] >= 20 and (st["bull_pct"] >= 70 or st["bull_pct"] <= 30):
-            score += 1
-            labels.append(f"Buzz inusual en StockTwits ({st['count']} msgs)")
-
-    if reddit_posts >= 5:
-        score += 1
-        labels.append(f"Trending en Reddit ({reddit_posts} posts, {reddit_upvotes} upvotes)")
-    elif reddit_posts >= 3:
-        labels.append(f"Menciones en Reddit ({reddit_posts} posts)")
-
-    return score, labels
-
-
-async def get_finnhub_sentiment(ticker):
-    """Retorna (score, label): score >0 bullish, <0 bearish"""
-    url = f"https://finnhub.io/api/v1/news-sentiment?symbol={ticker}&token={FINNHUB_KEY}"
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers=HEADERS) as r:
-                d = await r.json()
-                score = d.get("companyNewsScore", 0)
-                buzz  = d.get("buzz", {}).get("weeklyAverage", 0)
-                sent  = d.get("sentiment", {}).get("bullishPercent", 0.5)
-                if sent > 0.6:
-                    return 2, "Sentimiento positivo en noticias"
-                elif sent < 0.4:
-                    return -2, "Sentimiento negativo en noticias"
-                return 0, None
-    except Exception:
-        return 0, None
+            return {"price": d["c"], "change": d["dp"],
+                    "high": d["h"], "low": d["l"],
+                    "open": d["o"], "prev": d["pc"]}
 
 
 async def get_market_news():
-    """Noticias de mercado y geopolítica vía NewsData.io"""
     results = {}
     async with aiohttp.ClientSession() as session:
-        # Noticias financieras
-        url_fin = (
-            f"https://newsdata.io/api/1/latest"
-            f"?apikey={NEWSDATA_KEY}&language=es&category=business"
-            f"&q=bolsa+mercado+acciones&size=5"
-        )
-        # Noticias geopolíticas
-        url_geo = (
-            f"https://newsdata.io/api/1/latest"
-            f"?apikey={NEWSDATA_KEY}&language=es&category=politics,world"
-            f"&q=Ucrania+Rusia+Taiwan+OPEP+Fed+tasas&size=5"
-        )
-        try:
-            async with session.get(url_fin, headers=HEADERS) as r:
-                d = await r.json()
-                results["mercado"] = [
-                    a["title"] for a in d.get("results", [])[:5] if a.get("title")
-                ]
-        except Exception:
-            results["mercado"] = []
-        try:
-            async with session.get(url_geo, headers=HEADERS) as r:
-                d = await r.json()
-                results["geopolitica"] = [
-                    a["title"] for a in d.get("results", [])[:5] if a.get("title")
-                ]
-        except Exception:
-            results["geopolitica"] = []
+        for key, params in [
+            ("mercado",    "language=es&category=business&q=bolsa+mercado+acciones&size=5"),
+            ("geopolitica","language=es&category=politics,world&q=Ucrania+Rusia+Taiwan+OPEP+Fed&size=5"),
+        ]:
+            try:
+                url = f"https://newsdata.io/api/1/latest?apikey={NEWSDATA_KEY}&{params}"
+                async with session.get(url, headers=HEADERS) as r:
+                    d = await r.json()
+                    results[key] = [a["title"] for a in d.get("results", []) if a.get("title")]
+            except Exception:
+                results[key] = []
     return results
 
 
@@ -462,26 +462,25 @@ async def get_btc_price():
     url = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true"
     async with aiohttp.ClientSession() as session:
         async with session.get(url, headers=HEADERS) as r:
-            data = await r.json()
-            return data["bitcoin"]["usd"], data["bitcoin"]["usd_24h_change"]
+            d = await r.json()
+            return d["bitcoin"]["usd"], d["bitcoin"]["usd_24h_change"]
 
 
 async def get_stooq_price(ticker):
     url = f"https://stooq.com/q/l/?s={ticker}&f=sd2t2ohlcv&h&e=csv"
     async with aiohttp.ClientSession() as session:
         async with session.get(url, headers=HEADERS) as r:
-            text = await r.text()
-            lines = text.strip().split("\n")
+            text   = await r.text()
+            lines  = text.strip().split("\n")
             values = lines[1].split(",")
             if "N/D" in values:
                 return None, None
             close  = float(values[6])
             open_  = float(values[3])
-            change = ((close - open_) / open_) * 100
-            return close, change
+            return close, ((close - open_) / open_) * 100
 
 
-# ── Comandos ────────────────────────────────────────────────────────────────
+# ── Comandos ─────────────────────────────────────────────────────────────────
 
 @dp.message(Command("start"))
 async def start(message: types.Message):
@@ -489,11 +488,11 @@ async def start(message: types.Message):
         "Hola! Soy tu analista de mercados.\n\n"
         "Comandos:\n"
         "/analisis — Índices y Bitcoin en tiempo real\n"
-        "/precio TICKER — Precio en tiempo real de cualquier acción\n"
-        "/acciones — Top 5 recomendaciones ahora\n"
-        "/sentimiento TICKER — Sentimiento social (StockTwits + Reddit)\n"
+        "/precio TICKER — Precio en tiempo real\n"
+        "/acciones — Top 5 recomendaciones (técnico+social+noticias)\n"
+        "/sentimiento TICKER — Sentimiento social completo\n"
         "/noticias — Titulares de mercado y geopolítica\n"
-        "/suscribir — Alertas diarias a las 9:30 AM NY\n"
+        "/suscribir — Alertas diarias 9:30 AM NY + alertas de noticias\n"
         "/cancelar — Cancelar alertas"
     )
 
@@ -508,11 +507,10 @@ async def analisis(message: types.Message):
         gold,   gold_change   = await get_stooq_price("gc.f")
 
         def fmt(price, change, prefix="$", suffix=""):
-            if price is None:
-                return "Mercado cerrado"
+            if price is None: return "Mercado cerrado"
             return f"{prefix}{price:,.2f}{suffix} ({change:+.2f}%)"
 
-        texto = (
+        await message.answer(
             f"Resumen en tiempo real:\n\n"
             f"• Bitcoin: {fmt(btc_price, btc_change)} (24h)\n"
             f"• Nasdaq:  {fmt(nasdaq, nasdaq_change, prefix='', suffix=' pts')}\n"
@@ -520,13 +518,12 @@ async def analisis(message: types.Message):
             f"• Oro:     {fmt(gold, gold_change)}/oz\n"
         )
     except Exception as e:
-        texto = f"Error obteniendo datos: {e}"
-    await message.answer(texto)
+        await message.answer(f"Error: {e}")
 
 
 @dp.message(Command("acciones"))
 async def acciones(message: types.Message):
-    await message.answer(f"Analizando {len(STOCKS)} acciones, espera 30-60 segundos...")
+    await message.answer(f"Analizando {len(STOCKS)} acciones (técnico + sentimiento + noticias)...\nEspera 1-2 minutos.")
     recs = await get_recommendations()
     await message.answer(format_recommendations(recs))
 
@@ -535,7 +532,7 @@ async def acciones(message: types.Message):
 async def precio(message: types.Message):
     parts = message.text.strip().split()
     if len(parts) < 2:
-        await message.answer("Uso: /precio TICKER\nEjemplo: /precio AAPL")
+        await message.answer("Uso: /precio TICKER  — Ejemplo: /precio AAPL")
         return
     ticker = parts[1].upper()
     q = await get_finnhub_quote(ticker)
@@ -543,10 +540,10 @@ async def precio(message: types.Message):
         await message.answer(f"No se encontró cotización para {ticker}.")
         return
     await message.answer(
-        f"{ticker} — Tiempo real (Finnhub)\n\n"
-        f"• Precio:    ${q['price']:,.2f}  ({q['change']:+.2f}%)\n"
-        f"• Apertura:  ${q['open']:,.2f}\n"
-        f"• Máx/Mín:   ${q['high']:,.2f} / ${q['low']:,.2f}\n"
+        f"{ticker} — Tiempo real\n\n"
+        f"• Precio:     ${q['price']:,.2f}  ({q['change']:+.2f}%)\n"
+        f"• Apertura:   ${q['open']:,.2f}\n"
+        f"• Máx/Mín:    ${q['high']:,.2f} / ${q['low']:,.2f}\n"
         f"• Cierre ant: ${q['prev']:,.2f}\n"
     )
 
@@ -555,29 +552,21 @@ async def precio(message: types.Message):
 async def sentimiento(message: types.Message):
     parts = message.text.strip().split()
     if len(parts) < 2:
-        await message.answer("Uso: /sentimiento TICKER\nEjemplo: /sentimiento NVDA")
+        await message.answer("Uso: /sentimiento TICKER  — Ejemplo: /sentimiento NVDA")
         return
     ticker = parts[1].upper()
-    await message.answer(f"Analizando sentimiento social de {ticker}...")
+    await message.answer(f"Analizando sentimiento de {ticker}...")
 
     (fh_score, fh_label), (soc_score, soc_labels), quote = await asyncio.gather(
         get_finnhub_sentiment(ticker),
-        get_social_sentiment(ticker),
-        get_finnhub_quote(ticker)
+        get_social_sentiment_only(ticker),
+        get_finnhub_quote(ticker),
     )
 
-    lines = [f"Sentimiento social — {ticker}\n"]
-
+    lines = [f"Sentimiento — {ticker}\n"]
     if quote:
-        lines.append(f"Precio actual: ${quote['price']:,.2f} ({quote['change']:+.2f}%)\n")
-
-    # Finnhub
-    if fh_label:
-        lines.append(f"Noticias (Finnhub):\n• {fh_label}\n")
-    else:
-        lines.append("Noticias (Finnhub): neutro\n")
-
-    # StockTwits + Reddit
+        lines.append(f"Precio: ${quote['price']:,.2f} ({quote['change']:+.2f}%)\n")
+    lines.append(f"Noticias: {fh_label or 'Neutro'}\n")
     if soc_labels:
         lines.append("Redes sociales:")
         for l in soc_labels:
@@ -585,23 +574,40 @@ async def sentimiento(message: types.Message):
     else:
         lines.append("Redes sociales: sin señal clara")
 
-    score_total = fh_score + soc_score
-    if score_total >= 2:
-        resumen = "Sentimiento POSITIVO"
-    elif score_total <= -2:
-        resumen = "Sentimiento NEGATIVO"
-    else:
-        resumen = "Sentimiento NEUTRO"
-
-    lines.append(f"\nResumen: {resumen} (score {score_total:+d})")
+    total = fh_score + soc_score
+    verdict = "POSITIVO" if total >= 2 else "NEGATIVO" if total <= -2 else "NEUTRO"
+    lines.append(f"\nResumen: {verdict} (score {total:+d})")
     await message.answer("\n".join(lines))
+
+
+async def get_social_sentiment_only(ticker):
+    st, (reddit_posts, reddit_upvotes) = await asyncio.gather(
+        get_stocktwits_sentiment(ticker),
+        get_reddit_mentions(ticker)
+    )
+    score  = 0
+    labels = []
+    if st and st["total"] >= 5:
+        if st["bull_pct"] >= 65:
+            score += 2
+            labels.append(f"StockTwits {st['bull_pct']:.0f}% alcista ({st['bullish']}/{st['total']})")
+        elif st["bull_pct"] <= 35:
+            score -= 2
+            labels.append(f"StockTwits {100-st['bull_pct']:.0f}% bajista")
+        if st["count"] >= 20 and (st["bull_pct"] >= 70 or st["bull_pct"] <= 30):
+            labels.append(f"Buzz inusual ({st['count']} mensajes)")
+    if reddit_posts >= 5:
+        score += 1
+        labels.append(f"Trending Reddit ({reddit_posts} posts, {reddit_upvotes:,} upvotes)")
+    elif reddit_posts >= 3:
+        labels.append(f"Reddit ({reddit_posts} posts)")
+    return score, labels
 
 
 @dp.message(Command("noticias"))
 async def noticias(message: types.Message):
     await message.answer("Obteniendo noticias...")
-    news = await get_market_news()
-
+    news  = await get_market_news()
     lines = ["Noticias del mercado:\n"]
     if news.get("mercado"):
         lines.append("Mercado / Empresas:")
@@ -612,14 +618,18 @@ async def noticias(message: types.Message):
         lines.append("Geopolítica:")
         for t in news["geopolitica"]:
             lines.append(f"• {t}")
-
-    await message.answer("\n".join(lines) if len(lines) > 2 else "No se encontraron noticias.")
+    await message.answer("\n".join(lines) if len(lines) > 2 else "Sin noticias disponibles.")
 
 
 @dp.message(Command("suscribir"))
 async def suscribir(message: types.Message):
     subscribers.add(message.chat.id)
-    await message.answer("Suscrito. Recibirás recomendaciones cada día a las 9:30 AM (hora Nueva York).")
+    await message.answer(
+        "Suscrito.\n\n"
+        "Recibirás:\n"
+        "• Recomendaciones diarias a las 9:30 AM (hora NY)\n"
+        "• Alertas inmediatas cuando salga una noticia de alto impacto"
+    )
 
 
 @dp.message(Command("cancelar"))
@@ -628,7 +638,7 @@ async def cancelar(message: types.Message):
     await message.answer("Suscripción cancelada.")
 
 
-# ── Job diario ───────────────────────────────────────────────────────────────
+# ── Jobs programados ──────────────────────────────────────────────────────────
 
 async def send_daily_recommendations():
     if not subscribers:
@@ -642,10 +652,11 @@ async def send_daily_recommendations():
             pass
 
 
-# ── Main ─────────────────────────────────────────────────────────────────────
+# ── Main ──────────────────────────────────────────────────────────────────────
 
 async def main():
     scheduler.add_job(send_daily_recommendations, "cron", hour=9, minute=30)
+    scheduler.add_job(check_news_alerts, "interval", minutes=20)
     scheduler.start()
     await dp.start_polling(bot)
 
