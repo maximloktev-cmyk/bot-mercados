@@ -452,8 +452,8 @@ async def get_market_news():
     results = {}
     async with aiohttp.ClientSession() as session:
         for key, params in [
-            ("mercado",    "language=en&country=us&category=business&q=stocks+market+earnings&size=5"),
-            ("geopolitica","language=en&category=politics,world&q=Ukraine+Russia+Taiwan+OPEC+Fed+rates&size=5"),
+            ("mercado",    "language=en&category=business&q=Wall+Street+earnings+Fed+nasdaq&size=5"),
+            ("geopolitica","language=en&q=Iran+Ukraine+Taiwan+OPEC+war+sanctions+oil&size=5"),
         ]:
             try:
                 url = f"https://newsdata.io/api/1/latest?apikey={NEWSDATA_KEY}&{params}"
