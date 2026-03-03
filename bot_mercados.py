@@ -159,7 +159,7 @@ def analyze_stock(ticker, df):
 
         # ── Filtro mínimo: al menos 2 señales técnicas reales ────────────────
         tech_signals = [s for s in signals if "Sector" not in s and "SMA" not in s]
-        if len(tech_signals) < 2 or score < 5:
+        if len(tech_signals) < 2 or score < 4:
             return None
 
         return {
