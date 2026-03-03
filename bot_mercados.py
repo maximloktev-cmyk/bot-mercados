@@ -7,13 +7,6 @@ from datetime import datetime, timedelta
 TOKEN         = os.environ.get("BOT_TOKEN",    "8616657604:AAGQI9e_x9ZX5zw6zcHIloboeDO18OrKRBM")
 FINNHUB_KEY   = os.environ.get("FINNHUB_KEY",  "d6j133pr01qleu95u19gd6j133pr01qleu95u1a0")
 NEWSDATA_KEY  = os.environ.get("NEWSDATA_KEY", "pub_4cbb2798d21e439186e168313963b1bb")
-CLAUDE_KEY    = os.environ.get("CLAUDE_KEY",   "")
-
-try:
-    import anthropic
-    CLAUDE_AVAILABLE = bool(CLAUDE_KEY)
-except ImportError:
-    CLAUDE_AVAILABLE = False
 
 bot           = Bot(token=TOKEN)
 dp            = Dispatcher()
@@ -358,31 +351,6 @@ async def get_finnhub_sentiment(ticker):
         return 0, None
 
 
-# ════════════════════════════════════════════════════════════════════════════
-# 7. CLAUDE AI — TESIS DE INVERSIÓN
-# ════════════════════════════════════════════════════════════════════════════
-
-async def generate_ai_thesis(r, macro_lines):
-    if not CLAUDE_AVAILABLE:
-        return None
-    try:
-        client   = anthropic.AsyncAnthropic(api_key=CLAUDE_KEY)
-        signals  = " | ".join(r.get("tech_signals",[]) + r.get("social",[]) + r.get("extra",[]))
-        macro    = " | ".join(macro_lines[:2]) if macro_lines else "Normal"
-        prompt   = (
-            f"Analista financiero experto. Setup de trading corto plazo:\n"
-            f"Ticker: {r['ticker']} | Precio: ${r['price']:.2f} ({r.get('change',0):+.2f}%) | "
-            f"RSI: {r['rsi']:.0f} | Sector: {r.get('sector','General')}\n"
-            f"Señales: {signals}\nMacro: {macro}\n\n"
-            f"En 2 oraciones: ¿por qué es buena entrada ahora y cuál es el riesgo principal?"
-        )
-        msg = await client.messages.create(
-            model="claude-haiku-4-5-20251001", max_tokens=150,
-            messages=[{"role":"user","content":prompt}]
-        )
-        return msg.content[0].text
-    except Exception:
-        return None
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -558,13 +526,6 @@ async def get_recommendations():
         except Exception:
             pass
 
-    # Claude AI thesis para cada recomendación
-    if CLAUDE_AVAILABLE:
-        theses = await asyncio.gather(*[generate_ai_thesis(r, macro_lines) for r in top])
-        for r, thesis in zip(top, theses):
-            if thesis:
-                r["thesis"] = thesis
-
     # Guardar para historial
     save_recommendations(top)
 
@@ -613,9 +574,6 @@ def format_recommendations(recs, macro_lines=None, titulo="Recomendaciones corto
 
         if r.get("news_label"):
             lines.append(f"   NOTICIAS: {r['news_label']}")
-
-        if r.get("thesis"):
-            lines.append(f"   IA: {r['thesis']}")
 
         lines.append(f"   Entrada: ~${r['price']:,.2f} | Stop: ~${stop:,.2f} (-{stop_pct:.1f}%)")
         lines.append("   " + "─"*24)
@@ -747,7 +705,6 @@ async def get_social_sentiment_only(ticker):
 
 @dp.message(Command("start"))
 async def start(message: types.Message):
-    ai_status = "activada" if CLAUDE_AVAILABLE else "inactiva (agrega CLAUDE_KEY)"
     await message.answer(
         "Hola! Soy tu analista de mercados.\n\n"
         "Comandos:\n"
@@ -759,8 +716,7 @@ async def start(message: types.Message):
         "/noticias — Titulares de mercado y geopolítica\n"
         "/rendimiento — Historial de recomendaciones anteriores\n"
         "/suscribir — Alertas diarias 9:30 AM NY + alertas noticias\n"
-        "/cancelar — Cancelar alertas\n\n"
-        f"IA: {ai_status}"
+        "/cancelar — Cancelar alertas"
     )
 
 @dp.message(Command("macro"))
