@@ -39,35 +39,67 @@ SECTOR_BOOST = {
 
 # ── Universo de acciones ────────────────────────────────────────────────────
 
-STOCKS = [
+STOCKS = list(set([
     # IA / Semiconductores
     "NVDA", "AMD", "AVGO", "QCOM", "MU", "INTC", "AMAT", "LRCX", "KLAC",
-    "MRVL", "NXPI", "ON", "TXN", "SMCI", "IONQ", "RKLB",
-    # Big Tech / Cloud
+    "MRVL", "NXPI", "ON", "TXN", "SMCI", "IONQ", "RKLB", "WOLF", "ENPH",
+    "SWKS", "MPWR", "ENTG", "ONTO", "ACLS", "COHU", "AMBA", "SLAB",
+    # Big Tech / Cloud / Software
     "AAPL", "MSFT", "GOOGL", "AMZN", "META", "TSLA", "ORCL", "IBM",
-    "CRM", "ADBE", "NOW", "INTU", "SNPS", "CDNS", "PLTR",
+    "CRM", "ADBE", "NOW", "INTU", "SNPS", "CDNS", "PLTR", "WDAY",
+    "TEAM", "DDOG", "ZS", "CRWD", "NET", "OKTA", "MDB", "SNOW",
+    "ZM", "DOCU", "BILL", "HUBS", "SMAR", "GTLB", "ESTC", "APPN",
+    "CFLT", "DXCM", "VEEV", "COUP", "PAYC", "PCTY", "SAIC", "CACI",
     # Fintech / Financiero
     "V", "MA", "PYPL", "SQ", "AFRM", "SOFI", "HOOD", "COIN",
     "JPM", "BAC", "GS", "MS", "WFC", "C", "AXP", "BLK", "SCHW",
+    "USB", "PNC", "TFC", "COF", "DFS", "SYF", "ALLY", "LC",
+    "ICE", "CME", "CBOE", "NDAQ", "MKTX", "LPLA", "RJF", "SF",
+    "BX", "KKR", "APO", "CG", "ARES", "OWL",
     # Defensa / Aeroespacial
-    "LMT", "RTX", "NOC", "GD", "BA", "HII", "LDOS", "AXON", "CACI", "SAIC",
+    "LMT", "RTX", "NOC", "GD", "BA", "HII", "LDOS", "AXON",
+    "L3H", "TDG", "HEI", "KTOS", "RCAT", "ACHR", "JOBY",
     # Energía
     "XOM", "CVX", "OXY", "SLB", "HAL", "COP", "EOG", "MPC", "VLO", "PSX",
-    # Salud / Biotech
+    "PXD", "DVN", "FANG", "MRO", "HES", "APA", "NOV", "BKR",
+    "KMI", "WMB", "OKE", "ET", "MPLX", "EPD",
+    # Salud / Biotech / Pharma
     "UNH", "JNJ", "PFE", "ABBV", "MRK", "LLY", "BMY", "AMGN", "GILD",
     "REGN", "VRTX", "MRNA", "BIIB", "DXCM", "ISRG", "BSX", "EW",
-    # Consumo
-    "AMZN", "WMT", "COST", "HD", "TGT", "NKE", "SBUX", "MCD", "DIS",
-    "NFLX", "ABNB", "BKNG", "MAR", "HLT",
+    "ZBH", "SYK", "MDT", "ABT", "BAX", "BDX", "IQV", "CRL",
+    "ILMN", "PACB", "NVAX", "BNTX", "ARWR", "BEAM", "EDIT", "NTLA",
+    "RXRX", "CRVS", "ACAD", "SAGE", "SRTX", "PTGX",
+    # Consumo Discrecional
+    "WMT", "COST", "HD", "TGT", "NKE", "SBUX", "MCD", "DIS",
+    "NFLX", "ABNB", "BKNG", "MAR", "HLT", "LVS", "MGM", "WYNN",
+    "F", "GM", "RIVN", "LCID", "RACE", "TM",
+    "LOW", "BBY", "ETSY", "W", "CHWY", "CHEWY",
+    "PG", "KO", "PEP", "PM", "MO", "MDLZ", "CL", "KMB", "CHD",
+    # Retail / E-commerce
+    "EBAY", "MELI", "SE", "CPNG", "SHOP",
     # Cripto / Blockchain
-    "MSTR", "RIOT", "MARA", "CLSK", "BTBT",
-    # Industriales
+    "MSTR", "RIOT", "MARA", "CLSK", "BTBT", "HUT", "CIFR",
+    # Industriales / Manufactura
     "CAT", "DE", "HON", "MMM", "GE", "ETN", "EMR", "PH", "ROK", "IR",
-    # Telecom
-    "T", "VZ", "TMUS",
-    # ETFs populares
-    "SPY", "QQQ", "IWM", "XLK", "XLF", "XLE", "XLV", "XLI", "ARKK",
-]
+    "ITW", "DOV", "AME", "ROP", "FTV", "FBHS", "XYL", "IDEX", "IEX",
+    "GWW", "MSC", "FAST", "SWK", "PNR", "GNRC",
+    # Transporte / Logística
+    "UPS", "FDX", "DAL", "UAL", "AAL", "LUV", "JBLU", "ALK",
+    "CSX", "NSC", "UNP", "CP", "CNI",
+    # Real Estate / REIT
+    "AMT", "PLD", "CCI", "EQIX", "DLR", "SPG", "O", "VICI",
+    # Utilities
+    "NEE", "DUK", "SO", "AEP", "EXC", "SRE", "PCG", "ED",
+    # Telecom / Media
+    "T", "VZ", "TMUS", "CHTR", "CMCSA", "PARA", "WBD",
+    # Materiales
+    "LIN", "APD", "ECL", "DD", "DOW", "NUE", "STLD", "RS",
+    "FCX", "NEM", "AEM", "GOLD", "WPM", "AA", "ALB", "MP",
+    # ETFs
+    "SPY", "QQQ", "IWM", "XLK", "XLF", "XLE", "XLV", "XLI",
+    "XLB", "XLU", "XLRE", "XLY", "XLP", "GLD", "SLV", "USO",
+    "ARKK", "ARKG", "ARKW",
+]))
 
 
 # ── Indicadores técnicos ────────────────────────────────────────────────────
