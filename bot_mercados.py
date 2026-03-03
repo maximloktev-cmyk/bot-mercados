@@ -6,8 +6,9 @@ import os
 import aiohttp
 import yfinance as yf
 
-TOKEN        = os.environ.get("BOT_TOKEN",    "8616657604:AAGQI9e_x9ZX5zw6zcHIloboeDO18OrKRBM")
-FINNHUB_KEY  = os.environ.get("FINNHUB_KEY",  "d6j133pr01qleu95u19gd6j133pr01qleu95u1a0")
+TOKEN         = os.environ.get("BOT_TOKEN",     "8616657604:AAGQI9e_x9ZX5zw6zcHIloboeDO18OrKRBM")
+FINNHUB_KEY   = os.environ.get("FINNHUB_KEY",   "d6j133pr01qleu95u19gd6j133pr01qleu95u1a0")
+NEWSDATA_KEY  = os.environ.get("NEWSDATA_KEY",  "pub_4cbb2798d21e439186e168313963b1bb")
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
@@ -227,10 +228,22 @@ async def get_recommendations():
 
     ranked = sorted(results, key=lambda x: x["score"], reverse=True)
 
+    # Enriquecer top 15 candidatos con sentiment de Finnhub
+    candidates = ranked[:15]
+    sentiment_tasks = [get_finnhub_sentiment(r["ticker"]) for r in candidates]
+    sentiments = await asyncio.gather(*sentiment_tasks)
+    for r, (sent_score, sent_label) in zip(candidates, sentiments):
+        r["score"] += sent_score
+        if sent_label:
+            r["signals"].append(sent_label)
+
+    # Re-ordenar con sentiment incluido
+    candidates = sorted(candidates, key=lambda x: x["score"], reverse=True)
+
     # Máximo 2 acciones por sector para diversificar
     top = []
     sector_count = {}
-    for r in ranked:
+    for r in candidates:
         sector = r.get("sector") or "General"
         if sector_count.get(sector, 0) < 2:
             top.append(r)
@@ -304,6 +317,60 @@ async def get_finnhub_quote(ticker):
             }
 
 
+async def get_finnhub_sentiment(ticker):
+    """Retorna (score, label): score >0 bullish, <0 bearish"""
+    url = f"https://finnhub.io/api/v1/news-sentiment?symbol={ticker}&token={FINNHUB_KEY}"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=HEADERS) as r:
+                d = await r.json()
+                score = d.get("companyNewsScore", 0)
+                buzz  = d.get("buzz", {}).get("weeklyAverage", 0)
+                sent  = d.get("sentiment", {}).get("bullishPercent", 0.5)
+                if sent > 0.6:
+                    return 2, "Sentimiento positivo en noticias"
+                elif sent < 0.4:
+                    return -2, "Sentimiento negativo en noticias"
+                return 0, None
+    except Exception:
+        return 0, None
+
+
+async def get_market_news():
+    """Noticias de mercado y geopolítica vía NewsData.io"""
+    results = {}
+    async with aiohttp.ClientSession() as session:
+        # Noticias financieras
+        url_fin = (
+            f"https://newsdata.io/api/v1/latest"
+            f"?apikey={NEWSDATA_KEY}&language=en&category=business"
+            f"&q=stocks+market+earnings&size=5"
+        )
+        # Noticias geopolíticas
+        url_geo = (
+            f"https://newsdata.io/api/v1/latest"
+            f"?apikey={NEWSDATA_KEY}&language=en&category=politics,world"
+            f"&q=Ukraine+Russia+Taiwan+OPEC+Fed+rates&size=5"
+        )
+        try:
+            async with session.get(url_fin, headers=HEADERS) as r:
+                d = await r.json()
+                results["mercado"] = [
+                    a["title"] for a in d.get("results", [])[:5] if a.get("title")
+                ]
+        except Exception:
+            results["mercado"] = []
+        try:
+            async with session.get(url_geo, headers=HEADERS) as r:
+                d = await r.json()
+                results["geopolitica"] = [
+                    a["title"] for a in d.get("results", [])[:5] if a.get("title")
+                ]
+        except Exception:
+            results["geopolitica"] = []
+    return results
+
+
 async def get_btc_price():
     url = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true"
     async with aiohttp.ClientSession() as session:
@@ -337,6 +404,7 @@ async def start(message: types.Message):
         "/analisis — Índices y Bitcoin en tiempo real\n"
         "/precio TICKER — Precio en tiempo real de cualquier acción\n"
         "/acciones — Top 5 recomendaciones ahora\n"
+        "/noticias — Titulares de mercado y geopolítica\n"
         "/suscribir — Alertas diarias a las 9:30 AM NY\n"
         "/cancelar — Cancelar alertas"
     )
@@ -393,6 +461,25 @@ async def precio(message: types.Message):
         f"• Máx/Mín:   ${q['high']:,.2f} / ${q['low']:,.2f}\n"
         f"• Cierre ant: ${q['prev']:,.2f}\n"
     )
+
+
+@dp.message(Command("noticias"))
+async def noticias(message: types.Message):
+    await message.answer("Obteniendo noticias...")
+    news = await get_market_news()
+
+    lines = ["Noticias del mercado:\n"]
+    if news.get("mercado"):
+        lines.append("Mercado / Empresas:")
+        for t in news["mercado"]:
+            lines.append(f"• {t}")
+    lines.append("")
+    if news.get("geopolitica"):
+        lines.append("Geopolítica:")
+        for t in news["geopolitica"]:
+            lines.append(f"• {t}")
+
+    await message.answer("\n".join(lines) if len(lines) > 2 else "No se encontraron noticias.")
 
 
 @dp.message(Command("suscribir"))
