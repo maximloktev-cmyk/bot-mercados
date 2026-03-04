@@ -35,8 +35,13 @@ SECTOR_BOOST = {
     "NVDA":("IA/Semis",2),"AMD":("IA/Semis",2),"AVGO":("IA/Semis",2),
     "MU":("IA/Semis",2),"SMCI":("IA/Semis",2),"AMAT":("IA/Semis",1),
     "LRCX":("IA/Semis",1),"KLAC":("IA/Semis",1),"QCOM":("IA/Semis",1),
+    "ARM":("IA/Semis",2),"ASML":("IA/Semis",2),"VRT":("IA/Semis",2),
+    "LSCC":("IA/Semis",1),"MKS":("IA/Semis",1),"MCHP":("IA/Semis",1),
+    "ADI":("IA/Semis",1),"ONTO":("IA/Semis",1),"COHR":("IA/Semis",1),
     "MSFT":("IA/Cloud",1),"GOOGL":("IA/Cloud",1),"META":("IA/Cloud",1),
     "AMZN":("IA/Cloud",1),"CRM":("IA/Cloud",1),"PLTR":("IA/Cloud",2),
+    "DELL":("IA/Cloud",1),"HPE":("IA/Cloud",1),"ACN":("IA/Cloud",1),
+    "PATH":("IA/Cloud",1),"AI":("IA/Cloud",2),"SOUN":("IA/Cloud",2),
     "LMT":("Defensa",2),"RTX":("Defensa",2),"NOC":("Defensa",2),
     "GD":("Defensa",2),"BA":("Defensa",1),"LDOS":("Defensa",1),
     "HII":("Defensa",1),"AXON":("Defensa",1),"KTOS":("Defensa",1),
@@ -81,6 +86,13 @@ STOCKS = list(set([
     "XLY","XLP","XLB","XLU","XLRE","XLC","GLD","TLT","GDX",
     # Semis adicionales
     "MCHP","ADI","TER","ONTO","COHR","ACLS",
+    # Semis IA puros
+    "ARM","ASML","LSCC","RMBS","MKS","IPGP","LITE","CRUS","MTSI","PI","SITM",
+    "WDC","STX","ICHR","FORM","POWI","SLAB","ALGM",
+    # IA infraestructura / datos
+    "VRT","DELL","HPE","PSTG","NTAP","CIEN","VIAV",
+    # IA software / servicios
+    "AI","SOUN","PATH","ACN","CTSH","EPAM","BBAI",
     # Tech / Software adicional
     "UBER","LYFT","SNAP","PINS","RBLX","TWLO","TTD","APP",
     "TOST","MNDY","APPN","ASAN","SMAR","CDAY","ZI","DOCN","FOUR",
