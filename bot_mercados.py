@@ -110,6 +110,8 @@ STOCKS = list(set([
     "LNG","FANG","CTRA","AR","SM",
     # REITs adicional
     "WELL","VTR","VICI","CCI",
+    # Otros solicitados
+    "WBI",
 ]))
 
 # ── ETFs de sector para mapa de calor ────────────────────────────────────────
