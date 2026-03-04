@@ -40,11 +40,13 @@ SECTOR_BOOST = {
     "LMT":("Defensa",2),"RTX":("Defensa",2),"NOC":("Defensa",2),
     "GD":("Defensa",2),"BA":("Defensa",1),"LDOS":("Defensa",1),
     "HII":("Defensa",1),"AXON":("Defensa",1),"KTOS":("Defensa",1),
+    "LHX":("Defensa",2),"TXT":("Defensa",1),"BWXT":("Defensa",1),
     "COIN":("Cripto",2),"MSTR":("Cripto",2),"HOOD":("Cripto",1),
     "RIOT":("Cripto",1),"MARA":("Cripto",1),
     "XOM":("Energía",1),"CVX":("Energía",1),"OXY":("Energía",1),
     "SLB":("Energía",1),"HAL":("Energía",1),"VLO":("Energía",1),
-    "MPC":("Energía",1),"PSX":("Energía",1),
+    "MPC":("Energía",1),"PSX":("Energía",1),"LNG":("Energía",1),
+    "APP":("IA/Cloud",2),"TTD":("IA/Cloud",1),
 }
 
 STOCKS = list(set([
@@ -74,7 +76,28 @@ STOCKS = list(set([
     "NEE","DUK","SO","AEP","EXC",
     "T","VZ","TMUS","CMCSA",
     "LIN","FCX","NEM","GOLD","ALB","MP","AA",
+    "NUE","STLD","CLF","ATI","RIO","BHP","VALE","SCCO",
     "SPY","QQQ","IWM","XLK","XLF","XLE","XLV","XLI","ARKK",
+    "XLY","XLP","XLB","XLU","XLRE","XLC","GLD","TLT","GDX",
+    # Semis adicionales
+    "MCHP","ADI","TER","ONTO","COHR","ACLS",
+    # Tech / Software adicional
+    "UBER","LYFT","SNAP","PINS","RBLX","TWLO","TTD","APP",
+    "TOST","MNDY","APPN","ASAN","SMAR","CDAY","ZI","DOCN","FOUR",
+    # Healthcare / Biotech adicional
+    "EXAS","ALNY","MDGL","INCY","NBIX","SRPT","BEAM","CRSP","NTLA",
+    "HALO","JAZZ","IONS","FOLD","RARE","ACAD",
+    # Finanzas adicional
+    "UPST","FIS","FISV","GPN","MQ","SPGI","MCO","MSCI","NDAQ","WU",
+    # Consumer / Leisure adicional
+    "DKNG","PENN","RCL","CCL","AAL","LUV","CHWY","SPOT",
+    "LULU","ULTA","TJX","ROST","ELF","CMG","YUM","WING","ONON","DECK","RH",
+    # Defensa / Industrial adicional
+    "LHX","TXT","BWXT","WAB","DRS",
+    # Energía adicional
+    "LNG","FANG","CTRA","AR","SM",
+    # REITs adicional
+    "WELL","VTR","VICI","CCI",
 ]))
 
 # ── ETFs de sector para mapa de calor ────────────────────────────────────────
