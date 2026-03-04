@@ -12,11 +12,27 @@ bot           = Bot(token=TOKEN)
 dp            = Dispatcher()
 scheduler     = AsyncIOScheduler(timezone="America/New_York")
 HEADERS       = {"User-Agent": "Mozilla/5.0"}
-subscribers   = set()
 sent_articles = set()
 PERF_FILE            = "/tmp/performance.json"
 CACHE_FILE           = "/tmp/recommendations_cache.json"
 PREV_CANDIDATES_FILE = "/tmp/prev_candidates.json"
+SUBS_FILE            = "/tmp/subscribers.json"
+
+def load_subscribers():
+    try:
+        with open(SUBS_FILE) as f:
+            return set(json.load(f))
+    except Exception:
+        return set()
+
+def save_subscribers(subs):
+    try:
+        with open(SUBS_FILE, "w") as f:
+            json.dump(list(subs), f)
+    except Exception:
+        pass
+
+subscribers = load_subscribers()
 
 # ── Palabras clave de alto impacto ───────────────────────────────────────────
 IMPACT_KEYWORDS = [
@@ -786,14 +802,20 @@ async def check_news_alerts():
     if not subscribers:
         return
     url = (f"https://newsdata.io/api/1/latest"
-           f"?apikey={NEWSDATA_KEY}&language=en&country=us"
+           f"?apikey={NEWSDATA_KEY}&language=en"
            f"&category=business,politics,world&size=10")
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(url, headers=HEADERS) as r:
                 articles = (await r.json()).get("results", [])
 
+        sent_this_cycle = 0
+        critical = ["fed decision","rate hike","rate cut","opec","ukraine",
+                    "taiwan","nuclear","iran","tariff","sanction","recession"]
+
         for article in articles:
+            if sent_this_cycle >= 3:
+                break
             art_id = article.get("article_id") or article.get("link","")
             if not art_id or art_id in sent_articles:
                 continue
@@ -806,7 +828,6 @@ async def check_news_alerts():
             text_up  = f" {title} {desc} ".upper()
             affected = [t for t in STOCKS if len(t) >= 3 and
                         (f" {t} " in text_up or f"${t}" in text_up)]
-            critical = ["fed decision","rate hike","rate cut","opec","ukraine","taiwan","nuclear","iran"]
             if not affected and not any(kw in text for kw in critical):
                 continue
 
@@ -818,12 +839,12 @@ async def check_news_alerts():
             msg += f"Palabras clave: {', '.join(matched[:3])}"
 
             sent_articles.add(art_id)
+            sent_this_cycle += 1
             for chat_id in list(subscribers):
                 try:
                     await bot.send_message(chat_id, msg)
                 except Exception:
                     pass
-            break
     except Exception:
         pass
 
@@ -1050,6 +1071,7 @@ async def rendimiento(message: types.Message):
 @dp.message(Command("suscribir"))
 async def suscribir(message: types.Message):
     subscribers.add(message.chat.id)
+    save_subscribers(subscribers)
     await message.answer(
         "Suscrito.\n\n"
         "Recibiras:\n"
@@ -1060,6 +1082,7 @@ async def suscribir(message: types.Message):
 @dp.message(Command("cancelar"))
 async def cancelar(message: types.Message):
     subscribers.discard(message.chat.id)
+    save_subscribers(subscribers)
     await message.answer("Suscripcion cancelada.")
 
 
