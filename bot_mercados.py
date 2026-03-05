@@ -1,18 +1,19 @@
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-import asyncio, os, json, aiohttp, yfinance as yf
+import asyncio, os, json, aiohttp, yfinance as yf, pandas as pd
 from datetime import datetime, timedelta
 
-TOKEN         = os.environ.get("BOT_TOKEN",    "8616657604:AAGQI9e_x9ZX5zw6zcHIloboeDO18OrKRBM")
-FINNHUB_KEY   = os.environ.get("FINNHUB_KEY",  "d6j133pr01qleu95u19gd6j133pr01qleu95u1a0")
-NEWSDATA_KEY  = os.environ.get("NEWSDATA_KEY", "pub_4cbb2798d21e439186e168313963b1bb")
+TOKEN        = os.environ.get("BOT_TOKEN",    "8616657604:AAGQI9e_x9ZX5zw6zcHIloboeDO18OrKRBM")
+FINNHUB_KEY  = os.environ.get("FINNHUB_KEY",  "d6j133pr01qleu95u19gd6j133pr01qleu95u1a0")
+NEWSDATA_KEY = os.environ.get("NEWSDATA_KEY", "pub_4cbb2798d21e439186e168313963b1bb")
 
-bot           = Bot(token=TOKEN)
-dp            = Dispatcher()
-scheduler     = AsyncIOScheduler(timezone="America/New_York")
-HEADERS       = {"User-Agent": "Mozilla/5.0"}
+bot       = Bot(token=TOKEN)
+dp        = Dispatcher()
+scheduler = AsyncIOScheduler(timezone="America/New_York")
+HEADERS   = {"User-Agent": "Mozilla/5.0"}
 sent_articles = set()
+
 PERF_FILE            = "/tmp/performance.json"
 CACHE_FILE           = "/tmp/recommendations_cache.json"
 PREV_CANDIDATES_FILE = "/tmp/prev_candidates.json"
@@ -37,14 +38,26 @@ subscribers = load_subscribers()
 # ── Palabras clave de alto impacto ───────────────────────────────────────────
 IMPACT_KEYWORDS = [
     "earnings beat","earnings miss","supera estimaciones","resultados record",
-    "acquisition","merger","adquisición","fusión",
+    "acquisition","merger","adquisicion","fusion",
     "fda approval","fda rejects","bankruptcy","quiebra","chapter 11",
     "layoffs","despidos","rate hike","rate cut","fed decision","powell",
-    "opec","opep","ukraine","ucrania","taiwan","taiwán",
-    "sanctions","sanciones","nuclear","war escalation",
+    "opec","ukraine","taiwan","sanctions","nuclear","war escalation",
     "stock split","buyback","revenue guidance","profit warning",
-    "sec investigation","fraud","fraude","iran","strike",
+    "sec investigation","fraud","iran","strike","tariff","sanction","recession",
 ]
+
+# ── Reuniones FOMC 2026 ───────────────────────────────────────────────────────
+FOMC_DATES = [
+    "2026-01-28","2026-03-18","2026-05-06","2026-06-17",
+    "2026-07-29","2026-09-16","2026-11-04","2026-12-16",
+]
+
+# ── Biotech (riesgo eventos FDA) ─────────────────────────────────────────────
+BIOTECH_TICKERS = {
+    "MRNA","BNTX","NVAX","ARWR","RXRX","BEAM","CRSP","NTLA","HALO","JAZZ",
+    "IONS","FOLD","RARE","ACAD","EXAS","ALNY","MDGL","INCY","NBIX","SRPT",
+    "BIIB","ILMN","BBAI",
+}
 
 # ── Sectores geopolíticos favorables ────────────────────────────────────────
 SECTOR_BOOST = {
@@ -58,16 +71,16 @@ SECTOR_BOOST = {
     "AMZN":("IA/Cloud",1),"CRM":("IA/Cloud",1),"PLTR":("IA/Cloud",2),
     "DELL":("IA/Cloud",1),"HPE":("IA/Cloud",1),"ACN":("IA/Cloud",1),
     "PATH":("IA/Cloud",1),"AI":("IA/Cloud",2),"SOUN":("IA/Cloud",2),
+    "APP":("IA/Cloud",2),"TTD":("IA/Cloud",1),
     "LMT":("Defensa",2),"RTX":("Defensa",2),"NOC":("Defensa",2),
     "GD":("Defensa",2),"BA":("Defensa",1),"LDOS":("Defensa",1),
     "HII":("Defensa",1),"AXON":("Defensa",1),"KTOS":("Defensa",1),
     "LHX":("Defensa",2),"TXT":("Defensa",1),"BWXT":("Defensa",1),
     "COIN":("Cripto",2),"MSTR":("Cripto",2),"HOOD":("Cripto",1),
     "RIOT":("Cripto",1),"MARA":("Cripto",1),
-    "XOM":("Energía",1),"CVX":("Energía",1),"OXY":("Energía",1),
-    "SLB":("Energía",1),"HAL":("Energía",1),"VLO":("Energía",1),
-    "MPC":("Energía",1),"PSX":("Energía",1),"LNG":("Energía",1),
-    "APP":("IA/Cloud",2),"TTD":("IA/Cloud",1),
+    "XOM":("Energia",1),"CVX":("Energia",1),"OXY":("Energia",1),
+    "SLB":("Energia",1),"HAL":("Energia",1),"VLO":("Energia",1),
+    "MPC":("Energia",1),"PSX":("Energia",1),"LNG":("Energia",1),
 }
 
 STOCKS = list(set([
@@ -100,50 +113,40 @@ STOCKS = list(set([
     "NUE","STLD","CLF","ATI","RIO","BHP","VALE","SCCO",
     "SPY","QQQ","IWM","XLK","XLF","XLE","XLV","XLI","ARKK",
     "XLY","XLP","XLB","XLU","XLRE","XLC","GLD","TLT","GDX",
-    # Semis adicionales
     "MCHP","ADI","TER","ONTO","COHR","ACLS",
-    # Semis IA puros
     "ARM","ASML","LSCC","RMBS","MKS","IPGP","LITE","CRUS","MTSI","PI","SITM",
     "WDC","STX","ICHR","FORM","POWI","SLAB","ALGM",
-    # IA infraestructura / datos
     "VRT","DELL","HPE","PSTG","NTAP","CIEN","VIAV",
-    # IA software / servicios
     "AI","SOUN","PATH","ACN","CTSH","EPAM","BBAI",
-    # Tech / Software adicional
     "UBER","LYFT","SNAP","PINS","RBLX","TWLO","TTD","APP",
     "TOST","MNDY","APPN","ASAN","SMAR","CDAY","ZI","DOCN","FOUR",
-    # Healthcare / Biotech adicional
     "EXAS","ALNY","MDGL","INCY","NBIX","SRPT","BEAM","CRSP","NTLA",
     "HALO","JAZZ","IONS","FOLD","RARE","ACAD",
-    # Finanzas adicional
     "UPST","FIS","FISV","GPN","MQ","SPGI","MCO","MSCI","NDAQ","WU",
-    # Consumer / Leisure adicional
     "DKNG","PENN","RCL","CCL","AAL","LUV","CHWY","SPOT",
     "LULU","ULTA","TJX","ROST","ELF","CMG","YUM","WING","ONON","DECK","RH",
-    # Defensa / Industrial adicional
     "LHX","TXT","BWXT","WAB","DRS",
-    # Energía adicional
     "LNG","FANG","CTRA","AR","SM",
-    # REITs adicional
     "WELL","VTR","VICI","CCI",
-    # Otros solicitados
     "WBI",
 ]))
 
-# ── ETFs de sector para mapa de calor ────────────────────────────────────────
 SECTOR_ETFS = {
-    "Tecnología":   "XLK",
+    "Tecnologia":   "XLK",
     "Finanzas":     "XLF",
-    "Energía":      "XLE",
+    "Energia":      "XLE",
     "Salud":        "XLV",
     "Industriales": "XLI",
     "Cons. Discr.": "XLY",
-    "Cons. Básico": "XLP",
+    "Cons. Basico": "XLP",
     "Materiales":   "XLB",
     "Utilities":    "XLU",
     "Inmuebles":    "XLRE",
-    "Comunicación": "XLC",
+    "Comunicacion": "XLC",
 }
+
+# Semaforo para limitar llamadas concurrentes a yfinance info (lento)
+_yf_info_sem = asyncio.Semaphore(4)
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -151,7 +154,6 @@ SECTOR_ETFS = {
 # ════════════════════════════════════════════════════════════════════════════
 
 def load_prev_candidates():
-    """Carga los tickers candidatos del análisis anterior (hasta 36h atrás)."""
     try:
         with open(PREV_CANDIDATES_FILE) as f:
             data = json.load(f)
@@ -188,24 +190,79 @@ def calc_macd(closes):
     signal = macd.ewm(span=9).mean()
     return macd.iloc[-1], macd.iloc[-2], signal.iloc[-1], signal.iloc[-2]
 
-def analyze_stock(ticker, df):
+def calc_atr(df, period=14):
+    high   = df["High"].squeeze()
+    low    = df["Low"].squeeze()
+    close  = df["Close"].squeeze()
+    prev_c = close.shift(1)
+    tr = pd.concat([
+        high - low,
+        (high - prev_c).abs(),
+        (low  - prev_c).abs(),
+    ], axis=1).max(axis=1)
+    return float(tr.rolling(period).mean().iloc[-1])
+
+def calc_obv_trend(closes, volumes):
+    direction = closes.diff().apply(lambda x: 1 if x > 0 else (-1 if x < 0 else 0))
+    obv = (direction * volumes).cumsum()
+    recent = float(obv.iloc[-5:].mean())
+    prior  = float(obv.iloc[-15:-5].mean())
+    return recent > prior
+
+def check_risk_calendar():
+    """Devuelve lista de eventos de alto riesgo en los proximos 2 dias."""
+    today  = datetime.now().date()
+    events = []
+    for ds in FOMC_DATES:
+        d    = datetime.strptime(ds, "%Y-%m-%d").date()
+        diff = (d - today).days
+        if diff == 0:
+            events.append(f"HOY: Decision Fed (FOMC) — volatilidad extrema")
+        elif diff == 1:
+            events.append(f"MANANA: Decision Fed (FOMC) — evitar nuevas entradas")
+        elif diff == 2:
+            events.append(f"En 2 dias: FOMC — reducir exposicion")
+    dom = today.day
+    if 9 <= dom <= 13:
+        events.append("Semana CPI/PPI — posible volatilidad macro")
+    if today.weekday() == 4 and 1 <= dom <= 7:
+        events.append("NFP (empleo) hoy — alta volatilidad apertura")
+    return events
+
+def analyze_stock(ticker, df, spy_ret_20d=None):
     try:
         closes  = df["Close"].squeeze()
         volumes = df["Volume"].squeeze()
         if len(closes) < 50:
             return None
+
         price    = float(closes.iloc[-1])
         prev     = float(closes.iloc[-2])
         rsi      = calc_rsi(closes)
         macd_now, macd_prev, sig_now, sig_prev = calc_macd(closes)
         high_20d = float(closes.iloc[-21:-1].max())
         low_20d  = float(closes.iloc[-21:-1].min())
-        high_60d = float(closes.max())
+        high_60d = float(closes.iloc[-60:].max()) if len(closes) >= 60 else float(closes.max())
         sma20    = float(closes.iloc[-20:].mean())
         sma50    = float(closes.iloc[-50:].mean())
         vol_avg  = float(volumes.iloc[-21:-1].mean())
         vol_now  = float(volumes.iloc[-1])
 
+        # Bollinger Bands
+        std20    = float(closes.iloc[-20:].std())
+        bb_upper = sma20 + 2 * std20
+        bb_lower = sma20 - 2 * std20
+        bb_width = (bb_upper - bb_lower) / sma20 if sma20 > 0 else 0
+
+        # SMA200 para golden cross
+        sma200      = float(closes.iloc[-200:].mean()) if len(closes) >= 200 else None
+        sma50_prev  = float(closes.iloc[-51:-1].mean()) if len(closes) >= 51 else None
+        sma200_prev = float(closes.iloc[-201:-1].mean()) if len(closes) >= 201 else None
+
+        # Maximo 52 semanas
+        high_52w = float(closes.max()) if len(closes) >= 200 else None
+
+        # ── Filtros base ──────────────────────────────────────────────────────
         if rsi >= 70:            return None
         if price < sma20:        return None
         if price < sma50 * 0.97: return None
@@ -214,26 +271,78 @@ def analyze_stock(ticker, df):
         tech_signals = []
         sector_label = ""
 
+        # RSI
         if rsi < 35:
             score += 2; tech_signals.append(f"RSI {rsi:.0f} — sobreventa")
         elif 45 <= rsi <= 63:
             score += 1; tech_signals.append(f"RSI {rsi:.0f} — momentum saludable")
 
+        # MACD
         if macd_prev < sig_prev and macd_now > sig_now:
             score += 3; tech_signals.append("MACD cruce alcista")
 
+        # Resistencia / soporte
         if price > high_20d:
             score += 3; tech_signals.append(f"Rotura resistencia ${high_20d:.2f}")
-
         if prev <= low_20d * 1.005 and price > prev * 1.005:
             score += 2; tech_signals.append(f"Rebote soporte ${low_20d:.2f}")
 
+        # Medias moviles
         if price > sma20 and price > sma50:
             score += 1; tech_signals.append("Sobre SMA20 y SMA50")
 
+        # Golden cross / SMA200
+        if sma200 is not None:
+            if price > sma200:
+                score += 1; tech_signals.append(f"Sobre SMA200 — tendencia largo plazo")
+            if (sma50_prev and sma200_prev
+                    and sma50_prev < sma200_prev and sma50 > sma200):
+                score += 3; tech_signals.append("Golden Cross: SMA50 cruzo SMA200")
+
+        # Bollinger Bands
+        if price <= bb_lower * 1.02:
+            score += 1; tech_signals.append(f"Precio en Bollinger inferior ${bb_lower:.2f}")
+        if price > bb_upper and prev <= bb_upper:
+            score += 2; tech_signals.append(f"Rotura Bollinger superior ${bb_upper:.2f}")
+        if 0 < bb_width < 0.08:
+            score += 1; tech_signals.append("Bollinger squeeze — compresion pre-movimiento")
+
+        # Volumen
         if vol_avg > 0 and vol_now > vol_avg * 1.5:
             score += 2; tech_signals.append(f"Volumen {vol_now/vol_avg:.1f}x promedio")
 
+        # OBV
+        try:
+            if calc_obv_trend(closes, volumes):
+                score += 1; tech_signals.append("OBV alcista — volumen confirma precio")
+        except Exception:
+            pass
+
+        # Patron acumulacion (3+ dias alcistas con volumen creciente)
+        if len(closes) >= 5:
+            last5_c  = closes.iloc[-5:]
+            last5_v  = volumes.iloc[-5:]
+            up_days  = sum(1 for i in range(1, 5)
+                          if float(last5_c.iloc[i]) > float(last5_c.iloc[i-1]))
+            avg_prev = float(last5_v.iloc[-5:-2].mean())
+            avg_rec  = float(last5_v.iloc[-2:].mean())
+            if up_days >= 3 and avg_prev > 0 and avg_rec > avg_prev:
+                score += 2; tech_signals.append("Patron acumulacion: alza con volumen creciente")
+
+        # Fuerza relativa vs SPY
+        if spy_ret_20d is not None and len(closes) >= 20:
+            stock_ret = (price - float(closes.iloc[-20])) / float(closes.iloc[-20]) * 100
+            rs = stock_ret - spy_ret_20d
+            if rs > 3:
+                score += 2; tech_signals.append(f"Fuerza relativa vs SPY: +{rs:.1f}%")
+            elif rs < -5:
+                score -= 1
+
+        # Cercano a maximos 52 semanas
+        if high_52w and len(closes) >= 200 and price >= high_52w * 0.95:
+            score += 1; tech_signals.append(f"Cerca maximos 52 semanas (${high_52w:.2f})")
+
+        # Sector boost
         if ticker in SECTOR_BOOST:
             sector_label, boost = SECTOR_BOOST[ticker]
             score += boost
@@ -241,15 +350,18 @@ def analyze_stock(ticker, df):
         if len(tech_signals) < 2 or score < 4:
             return None
 
-        stop = max(low_20d, sma20 * 0.98)
+        # Stop loss basado en ATR
+        try:
+            atr  = calc_atr(df)
+            stop = max(price - 1.5 * atr, low_20d, sma20 * 0.98)
+        except Exception:
+            stop = max(low_20d, sma20 * 0.98)
+
         risk = price - stop
         if risk <= 0:
             return None
 
-        # ── Filtro R:R mínimo 2:1 ────────────────────────────────────────────
-        # El target 2:1 debe ser alcanzable: se permite si el precio ya
-        # superó el máximo de 60d (breakout a nuevos máximos) o si el
-        # target no está más de un 5% por encima del máximo de 60d.
+        # Filtro R:R 2:1
         target      = price + 2 * risk
         is_breakout = price >= high_60d * 0.99
         if not is_breakout and target > high_60d * 1.05:
@@ -261,13 +373,14 @@ def analyze_stock(ticker, df):
             "news_label": None, "extra": [],
             "price": price, "rsi": rsi,
             "sector": sector_label, "stop": stop,
+            "fda_risk": ticker in BIOTECH_TICKERS,
         }
     except Exception:
         return None
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# 2. MACRO CONTEXT (VIX + DXY + YIELDS)
+# 2. MACRO CONTEXT
 # ════════════════════════════════════════════════════════════════════════════
 
 async def get_macro_context():
@@ -289,39 +402,71 @@ def interpret_macro(macro):
     vix = macro.get("vix")
     dxy = macro.get("dxy")
     tnx = macro.get("tnx")
-
     if vix:
         if vix > 35:
-            score_adj -= 3
-            lines.append(f"VIX {vix:.1f} — PANICO: evitar nuevas posiciones")
+            score_adj -= 3; lines.append(f"VIX {vix:.1f} — PANICO: evitar nuevas posiciones")
         elif vix > 25:
-            score_adj -= 1
-            lines.append(f"VIX {vix:.1f} — volatilidad alta, reducir tamaño")
+            score_adj -= 1; lines.append(f"VIX {vix:.1f} — volatilidad alta, reducir tamanio")
         elif vix < 15:
-            score_adj += 1
-            lines.append(f"VIX {vix:.1f} — mercado calmo, favorable")
+            score_adj += 1; lines.append(f"VIX {vix:.1f} — mercado calmo, favorable")
         else:
             lines.append(f"VIX {vix:.1f} — normal")
     if dxy:
         if dxy > 106:
-            lines.append(f"DXY {dxy:.1f} — dólar fuerte, presión en commodities/emergentes")
+            lines.append(f"DXY {dxy:.1f} — dolar fuerte, presion en commodities/emergentes")
         elif dxy < 100:
-            lines.append(f"DXY {dxy:.1f} — dólar débil, favorable para materiales y cripto")
+            lines.append(f"DXY {dxy:.1f} — dolar debil, favorable para materiales y cripto")
         else:
-            lines.append(f"DXY {dxy:.1f} — dólar neutro")
+            lines.append(f"DXY {dxy:.1f} — dolar neutro")
     if tnx:
         if tnx > 4.5:
-            lines.append(f"Yield 10Y {tnx:.2f}% — tasas altas, presión en growth/tech")
+            lines.append(f"Yield 10Y {tnx:.2f}% — tasas altas, presion en growth/tech")
         elif tnx < 3.5:
             lines.append(f"Yield 10Y {tnx:.2f}% — tasas bajas, favorable para acciones")
         else:
             lines.append(f"Yield 10Y {tnx:.2f}%")
-
     return score_adj, lines
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# 3. MULTI-TIMEFRAME (SEMANAL)
+# 3. FEAR & GREED INDEX
+# ════════════════════════════════════════════════════════════════════════════
+
+async def get_fear_greed():
+    """Intenta CNN primero, luego Alternative.me como fallback."""
+    # CNN Fear & Greed
+    try:
+        url = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata/"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                url,
+                headers={**HEADERS, "Referer": "https://www.cnn.com/"},
+                timeout=aiohttp.ClientTimeout(total=6),
+            ) as r:
+                d   = await r.json()
+                fg  = d.get("fear_and_greed", {})
+                val = fg.get("score")
+                if val is not None:
+                    rating = fg.get("rating", "").replace("_", " ").title()
+                    return int(float(val)), rating
+    except Exception:
+        pass
+    # Alternative.me (crypto F&G, correlacionado con mercado)
+    try:
+        url = "https://api.alternative.me/fng/?limit=1"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=HEADERS,
+                                   timeout=aiohttp.ClientTimeout(total=6)) as r:
+                d   = await r.json()
+                val = d.get("data", [{}])[0]
+                return int(val.get("value", 0)), val.get("value_classification","")
+    except Exception:
+        pass
+    return None, None
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# 4. MULTI-TIMEFRAME (SEMANAL)
 # ════════════════════════════════════════════════════════════════════════════
 
 async def get_weekly_trends(tickers):
@@ -351,7 +496,7 @@ async def get_weekly_trends(tickers):
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# 4. INSIDER BUYING (Finnhub)
+# 5. INSIDER BUYING (Finnhub)
 # ════════════════════════════════════════════════════════════════════════════
 
 async def get_insider_buying(ticker):
@@ -360,7 +505,7 @@ async def get_insider_buying(ticker):
         async with aiohttp.ClientSession() as session:
             async with session.get(url, headers=HEADERS) as r:
                 d = await r.json()
-        cutoff = (datetime.now() - timedelta(days=45)).strftime("%Y-%m-%d")
+        cutoff    = (datetime.now() - timedelta(days=45)).strftime("%Y-%m-%d")
         purchases = [
             t for t in d.get("data", [])
             if str(t.get("transactionType","")).startswith("P")
@@ -376,12 +521,11 @@ async def get_insider_buying(ticker):
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# 5. OPCIONES INUSUALES (yfinance)
+# 6. OPCIONES INUSUALES (yfinance)
 # ════════════════════════════════════════════════════════════════════════════
 
 async def get_unusual_options(ticker):
     def fetch():
-        import pandas as pd
         t    = yf.Ticker(ticker)
         exps = t.options
         if not exps:
@@ -406,7 +550,66 @@ async def get_unusual_options(ticker):
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# 6. SENTIMIENTO SOCIAL
+# 7. ANALISTAS (Finnhub)
+# ════════════════════════════════════════════════════════════════════════════
+
+async def get_analyst_recommendation(ticker):
+    url = f"https://finnhub.io/api/v1/stock/recommendation?symbol={ticker}&token={FINNHUB_KEY}"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=HEADERS) as r:
+                data = await r.json()
+        if not data:
+            return None
+        latest = data[0]
+        sb  = latest.get("strongBuy",  0)
+        b   = latest.get("buy",        0)
+        h   = latest.get("hold",       0)
+        s   = latest.get("sell",       0)
+        ss  = latest.get("strongSell", 0)
+        tot = sb + b + h + s + ss
+        if tot == 0:
+            return None
+        bull_pct = (sb + b) / tot * 100
+        return {"sb": sb, "b": b, "h": h, "s": s, "ss": ss,
+                "total": tot, "bull_pct": bull_pct}
+    except Exception:
+        return None
+
+async def get_price_target(ticker):
+    url = f"https://finnhub.io/api/v1/stock/price-target?symbol={ticker}&token={FINNHUB_KEY}"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=HEADERS) as r:
+                d = await r.json()
+        mean = d.get("targetMean")
+        high = d.get("targetHigh")
+        low  = d.get("targetLow")
+        return {"mean": mean, "high": high, "low": low} if mean else None
+    except Exception:
+        return None
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# 8. SHORT INTEREST (yfinance)
+# ════════════════════════════════════════════════════════════════════════════
+
+async def get_short_interest(ticker):
+    def fetch():
+        info = yf.Ticker(ticker).info
+        return {
+            "short_pct":   (info.get("shortPercentOfFloat") or 0) * 100,
+            "short_ratio":  info.get("shortRatio") or 0,
+        }
+    async with _yf_info_sem:
+        try:
+            return await asyncio.wait_for(asyncio.to_thread(fetch), timeout=8.0)
+        except Exception:
+            return None
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# 9. SENTIMIENTO SOCIAL
 # ════════════════════════════════════════════════════════════════════════════
 
 async def get_stocktwits_sentiment(ticker):
@@ -436,7 +639,8 @@ async def get_reddit_mentions(ticker):
            f"/search.json?q={ticker}&sort=new&limit=25&t=day")
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers={**HEADERS,"User-Agent":"MarketBot/1.0"}) as r:
+            async with session.get(url,
+                                   headers={**HEADERS,"User-Agent":"MarketBot/1.0"}) as r:
                 d       = await r.json()
                 posts   = d.get("data",{}).get("children",[])
                 upvotes = sum(p["data"].get("score",0) for p in posts)
@@ -459,11 +663,10 @@ async def get_finnhub_sentiment(ticker):
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# 7. FILTRO DE EARNINGS (Finnhub)
+# 10. FILTRO DE EARNINGS (Finnhub)
 # ════════════════════════════════════════════════════════════════════════════
 
 async def has_upcoming_earnings(ticker, days=3):
-    """True si la empresa reporta resultados en los próximos `days` días."""
     today  = datetime.now().strftime("%Y-%m-%d")
     future = (datetime.now() + timedelta(days=days)).strftime("%Y-%m-%d")
     url = (f"https://finnhub.io/api/v1/calendar/earnings"
@@ -474,11 +677,11 @@ async def has_upcoming_earnings(ticker, days=3):
                 d = await r.json()
                 return len(d.get("earningsCalendar", [])) > 0
     except Exception:
-        return False  # Si falla el check, no excluir
+        return False
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# 8. PERFORMANCE TRACKING
+# 11. PERFORMANCE TRACKING
 # ════════════════════════════════════════════════════════════════════════════
 
 def save_recommendations(recs):
@@ -502,15 +705,11 @@ async def get_performance_report():
         with open(PERF_FILE) as f:
             history = json.load(f)
     except Exception:
-        return "No hay historial todavía. Usa /acciones para generar recomendaciones."
-
+        return "No hay historial todavia. Usa /acciones para generar recomendaciones."
     if not history:
-        return "No hay historial todavía."
-
-    lines  = ["Rendimiento de recomendaciones anteriores:\n"]
-    wins   = 0
-    total  = 0
-
+        return "No hay historial todavia."
+    lines = ["Rendimiento de recomendaciones anteriores:\n"]
+    wins = total = 0
     for entry in history[-10:]:
         lines.append(f"Fecha: {entry['date']}")
         for rec in entry["recs"]:
@@ -524,23 +723,20 @@ async def get_performance_report():
             else:
                 lines.append(f"  {rec['ticker']}: ${rec['price']:.2f} (sin datos)")
         lines.append("")
-
     if total > 0:
         lines.append(f"Tasa de acierto: {wins}/{total} ({wins/total*100:.0f}%)")
     return "\n".join(lines)
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# 9. RENDIMIENTO POR SECTOR
+# 12. RENDIMIENTO POR SECTOR
 # ════════════════════════════════════════════════════════════════════════════
 
 async def get_sector_performance():
     def fetch():
         tickers = list(SECTOR_ETFS.values())
-        data    = yf.download(
-            tickers, period="2d", interval="1d",
-            progress=False, group_by="ticker", auto_adjust=True
-        )
+        data    = yf.download(tickers, period="2d", interval="1d",
+                              progress=False, group_by="ticker", auto_adjust=True)
         out = {}
         for name, etf in SECTOR_ETFS.items():
             try:
@@ -559,14 +755,22 @@ async def get_sector_performance():
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# 10. MOTOR DE RECOMENDACIONES
+# 13. MOTOR DE RECOMENDACIONES
 # ════════════════════════════════════════════════════════════════════════════
 
-async def enrich_candidate(r, weekly, macro_adj):
+async def enrich_candidate(r, weekly, macro_adj, btc_change=0.0):
     ticker = r["ticker"]
-
     r["score"] += macro_adj
 
+    # Boost BTC para sector Cripto
+    if r.get("sector") == "Cripto":
+        if btc_change >= 3:
+            r["score"] += 1
+            r["extra"].append(f"BTC +{btc_change:.1f}% hoy — contexto cripto favorable")
+        elif btc_change <= -3:
+            r["score"] -= 1
+
+    # Tendencia semanal
     wk = weekly.get(ticker)
     if wk:
         if wk["bullish"] and wk["rsi_w"] < 65:
@@ -575,55 +779,115 @@ async def enrich_candidate(r, weekly, macro_adj):
         elif not wk["bullish"]:
             r["score"] -= 1
 
-    insider, options, st, (reddit_n, reddit_up), (fh_score, fh_label) = await asyncio.gather(
+    # Llamadas paralelas: todo de una vez
+    (insider, options, st,
+     (reddit_n, reddit_up),
+     (fh_score, fh_label),
+     analyst_rec,
+     price_tgt,
+     short_info) = await asyncio.gather(
         get_insider_buying(ticker),
         get_unusual_options(ticker),
         get_stocktwits_sentiment(ticker),
         get_reddit_mentions(ticker),
         get_finnhub_sentiment(ticker),
+        get_analyst_recommendation(ticker),
+        get_price_target(ticker),
+        get_short_interest(ticker),
     )
 
     if insider:
         r["score"] += 2
-        r["extra"].append(f"Insiders comprando ({insider['count']} transacciones, {insider['shares']:,} acc.)")
+        r["extra"].append(
+            f"Insiders comprando ({insider['count']} transacciones, {insider['shares']:,} acc.)")
 
     if options:
         r["score"] += 2
-        r["extra"].append(f"Opciones inusuales: calls {options['ratio']}x promedio en strike ${options['strike']:.0f}")
+        r["extra"].append(
+            f"Opciones inusuales: calls {options['ratio']}x promedio en strike ${options['strike']:.0f}")
 
     if fh_score != 0:
         r["score"] += fh_score
         if fh_label:
             r["news_label"] = fh_label
 
+    # Consenso analistas
+    if analyst_rec and analyst_rec["total"] >= 5:
+        bp = analyst_rec["bull_pct"]
+        if bp >= 70:
+            r["score"] += 3
+            r["extra"].append(
+                f"Analistas: {analyst_rec['sb']} StrongBuy + {analyst_rec['b']} Buy"
+                f" / {analyst_rec['total']} total ({bp:.0f}% alcista)")
+        elif bp >= 50:
+            r["score"] += 1
+            r["extra"].append(
+                f"Analistas: {bp:.0f}% recomiendan compra ({analyst_rec['total']} analistas)")
+        elif bp < 30:
+            r["score"] -= 2
+            r["extra"].append(
+                f"Analistas: mayoria en Hold/Sell ({100-bp:.0f}% no recomienda)")
+
+    # Target de precio
+    if price_tgt and price_tgt["mean"] and r["price"]:
+        upside = (price_tgt["mean"] - r["price"]) / r["price"] * 100
+        if upside >= 15:
+            r["score"] += 1
+            r["extra"].append(
+                f"Target analistas: ${price_tgt['mean']:,.0f} (upside +{upside:.0f}%)")
+        elif upside > 0:
+            r["extra"].append(
+                f"Target analistas: ${price_tgt['mean']:,.0f} (+{upside:.0f}%)")
+        elif upside < -5:
+            r["score"] -= 1
+            r["extra"].append(
+                f"Target analistas por debajo del precio (downside {upside:.0f}%)")
+
+    # Short squeeze
+    if short_info:
+        sp = short_info["short_pct"]
+        sr = short_info["short_ratio"]
+        if sp >= 15:
+            r["score"] += 2
+            r["extra"].append(
+                f"Short squeeze potencial: {sp:.0f}% float en corto, {sr:.1f} dias cobertura")
+        elif sp >= 8:
+            r["extra"].append(f"Short interest: {sp:.0f}% (moderado)")
+
+    # StockTwits
     if st and st["total"] >= 5:
         if st["bull_pct"] >= 65:
             r["score"] += 2
-            r["social"].append(f"StockTwits {st['bull_pct']:.0f}% alcista ({st['bullish']}/{st['total']})")
+            r["social"].append(
+                f"StockTwits {st['bull_pct']:.0f}% alcista ({st['bullish']}/{st['total']})")
         elif st["bull_pct"] <= 35:
             r["score"] -= 2
             r["social"].append(f"StockTwits {100-st['bull_pct']:.0f}% bajista")
         if st["count"] >= 20 and (st["bull_pct"] >= 70 or st["bull_pct"] <= 30):
             r["social"].append(f"Buzz inusual ({st['count']} mensajes)")
 
+    # Reddit
     if reddit_n >= 5:
         r["score"] += 1
         r["social"].append(f"Trending Reddit ({reddit_n} posts, {reddit_up:,} upvotes)")
     elif reddit_n >= 3:
         r["social"].append(f"Reddit ({reddit_n} posts)")
 
+    # Flag FDA
+    if r.get("fda_risk"):
+        r["extra"].append("AVISO BIOTECH: verificar calendario FDA antes de entrar")
+
     return r
 
 
 async def get_recommendations(force_refresh=False):
-    # ── 1. Caché de 3 horas ──────────────────────────────────────────────────
+    # ── 1. Cache de 3 horas ──────────────────────────────────────────────────
     if not force_refresh:
         try:
             with open(CACHE_FILE) as f:
                 cache = json.load(f)
             age = (datetime.now() - datetime.fromisoformat(cache["timestamp"])).total_seconds()
             if age < 3 * 3600:
-                # Invalidar si S&P500 se movió más de 1%
                 sp500_now, _ = await get_stooq_price("^spx")
                 sp500_cached = cache.get("sp500")
                 market_moved = (
@@ -632,32 +896,68 @@ async def get_recommendations(force_refresh=False):
                 )
                 if not market_moved:
                     cached_macro = cache.get("macro_lines", [])
-                    cached_macro = [f"(Caché — {datetime.fromisoformat(cache['timestamp']).strftime('%H:%M')})"] + cached_macro
+                    t_str = datetime.fromisoformat(cache["timestamp"]).strftime("%H:%M")
+                    cached_macro = [f"(Cache — actualizado {t_str})"] + cached_macro
                     return cache["recs"], cached_macro
         except Exception:
             pass
 
-    # ── 2. Descarga bulk ─────────────────────────────────────────────────────
+    # ── 2. Descarga 1 año de datos ───────────────────────────────────────────
     def fetch_daily():
-        return yf.download(STOCKS, period="60d", interval="1d",
+        return yf.download(STOCKS, period="1y", interval="1d",
                            progress=False, group_by="ticker", auto_adjust=True)
 
-    daily_data, macro = await asyncio.gather(
+    daily_data, macro, btc_result, fg_result = await asyncio.gather(
         asyncio.to_thread(fetch_daily),
         get_macro_context(),
+        _safe_btc(),
+        get_fear_greed(),
     )
+
+    btc_price, btc_change = btc_result
+    fg_score,  fg_rating  = fg_result
 
     macro_adj, macro_lines = interpret_macro(macro)
 
-    # ── 3. Cargar candidatos previos ─────────────────────────────────────────
+    # Fear & Greed en contexto macro
+    if fg_score is not None:
+        fg_label = ("Miedo extremo" if fg_score <= 25 else
+                    "Miedo"         if fg_score <= 45 else
+                    "Neutral"       if fg_score <= 55 else
+                    "Codicia"       if fg_score <= 75 else
+                    "Codicia extrema")
+        macro_lines.insert(0, f"Fear & Greed: {fg_score}/100 — {fg_label}")
+        if fg_score <= 25:
+            macro_adj -= 1
+        elif fg_score >= 80:
+            macro_adj -= 1  # euforia excesiva = precaucion
+
+    # Alertas de calendario economico
+    cal_events = check_risk_calendar()
+    for ev in cal_events:
+        macro_lines.append(f"RIESGO: {ev}")
+    if cal_events:
+        macro_adj -= 1  # penalizar score en dias de alto riesgo
+
+    # ── 3. Retorno SPY 20d (fuerza relativa) ─────────────────────────────────
+    spy_ret_20d = None
+    try:
+        spy_closes = daily_data["SPY"].dropna()["Close"].squeeze()
+        if len(spy_closes) >= 20:
+            spy_ret_20d = ((float(spy_closes.iloc[-1]) - float(spy_closes.iloc[-20]))
+                           / float(spy_closes.iloc[-20]) * 100)
+    except Exception:
+        pass
+
+    # ── 4. Candidatos previos (persistencia) ─────────────────────────────────
     prev_candidates = load_prev_candidates()
 
-    # ── 4. Análisis técnico + bonus persistencia ─────────────────────────────
+    # ── 5. Analisis tecnico ───────────────────────────────────────────────────
     results = []
     for ticker in STOCKS:
         try:
             df     = daily_data[ticker].dropna()
-            result = analyze_stock(ticker, df)
+            result = analyze_stock(ticker, df, spy_ret_20d=spy_ret_20d)
             if result:
                 if ticker in prev_candidates:
                     result["score"] += 2
@@ -668,19 +968,15 @@ async def get_recommendations(force_refresh=False):
 
     ranked    = sorted(results, key=lambda x: x["score"], reverse=True)
     tickers15 = [r["ticker"] for r in ranked[:15]]
-
-    # Guardar top-15 para próxima ejecución (persistencia)
     save_prev_candidates(tickers15)
 
-    # ── 5. Filtro earnings (top 15) ──────────────────────────────────────────
+    # ── 6. Filtro earnings ────────────────────────────────────────────────────
     earnings_flags = await asyncio.gather(*[has_upcoming_earnings(t) for t in tickers15])
     candidates = [r for r, skip in zip(ranked[:15], earnings_flags) if not skip]
 
-    # Si el filtro dejó muy pocos, completar con los siguientes de ranked
     if len(candidates) < 5 and len(ranked) > 15:
-        extra      = ranked[15:30]
-        ex_tickers = [r["ticker"] for r in extra]
-        ex_flags   = await asyncio.gather(*[has_upcoming_earnings(t) for t in ex_tickers])
+        extra    = ranked[15:30]
+        ex_flags = await asyncio.gather(*[has_upcoming_earnings(r["ticker"]) for r in extra])
         for r, skip in zip(extra, ex_flags):
             if not skip:
                 candidates.append(r)
@@ -688,16 +984,17 @@ async def get_recommendations(force_refresh=False):
                 break
 
     if not candidates:
-        candidates = ranked[:5]  # fallback de emergencia
+        candidates = ranked[:5]
 
-    # ── 6. Datos semanales + enriquecimiento ─────────────────────────────────
+    # ── 7. Tendencia semanal + enriquecimiento ────────────────────────────────
     weekly   = await get_weekly_trends([r["ticker"] for r in candidates])
     enriched = await asyncio.gather(*[
-        enrich_candidate(r, weekly, macro_adj) for r in candidates
+        enrich_candidate(r, weekly, macro_adj, btc_change or 0.0)
+        for r in candidates
     ])
     enriched = sorted(enriched, key=lambda x: x["score"], reverse=True)
 
-    # ── 7. Máx 2 por sector ───────────────────────────────────────────────────
+    # ── 8. Max 2 por sector ───────────────────────────────────────────────────
     top          = []
     sector_count = {}
     for r in enriched:
@@ -708,7 +1005,7 @@ async def get_recommendations(force_refresh=False):
         if len(top) == 5:
             break
 
-    # ── 8. Precio RT (Finnhub) ────────────────────────────────────────────────
+    # ── 9. Precio RT (Finnhub) ────────────────────────────────────────────────
     for r in top:
         try:
             q = await get_finnhub_quote(r["ticker"])
@@ -722,14 +1019,14 @@ async def get_recommendations(force_refresh=False):
 
     save_recommendations(top)
 
-    # ── 9. Guardar caché ──────────────────────────────────────────────────────
+    # ── 10. Guardar cache ─────────────────────────────────────────────────────
     try:
         sp500_save, _ = await get_stooq_price("^spx")
         with open(CACHE_FILE, "w") as f:
             json.dump({
-                "timestamp": datetime.now().isoformat(),
-                "sp500": sp500_save,
-                "recs": top,
+                "timestamp":   datetime.now().isoformat(),
+                "sp500":       sp500_save,
+                "recs":        top,
                 "macro_lines": macro_lines,
             }, f, default=str)
     except Exception:
@@ -795,7 +1092,7 @@ def format_recommendations(recs, macro_lines=None, titulo="Recomendaciones corto
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# 11. ALERTAS DE NOTICIAS
+# 14. ALERTAS DE NOTICIAS
 # ════════════════════════════════════════════════════════════════════════════
 
 async def check_news_alerts():
@@ -850,8 +1147,14 @@ async def check_news_alerts():
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# 12. HELPERS DE PRECIOS
+# 15. HELPERS DE PRECIOS
 # ════════════════════════════════════════════════════════════════════════════
+
+async def _safe_btc():
+    try:
+        return await get_btc_price()
+    except Exception:
+        return None, 0.0
 
 async def get_finnhub_quote(ticker):
     url = f"https://finnhub.io/api/v1/quote?symbol={ticker}&token={FINNHUB_KEY}"
@@ -868,7 +1171,7 @@ async def get_market_news():
     async with aiohttp.ClientSession() as session:
         for key, params in [
             ("mercado",    "language=en&category=business&q=Wall+Street+earnings+Fed+nasdaq&size=5"),
-            ("geopolitica","language=en&q=Iran+Ukraine+Taiwan+OPEC+war+sanctions+oil&size=5"),
+            ("geopolitica","language=en&q=Iran+Ukraine+Taiwan+OPEC+war+sanctions+tariff+oil&size=5"),
         ]:
             try:
                 url = f"https://newsdata.io/api/1/latest?apikey={NEWSDATA_KEY}&{params}"
@@ -917,7 +1220,7 @@ async def get_social_sentiment_only(ticker):
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# 13. COMANDOS
+# 16. COMANDOS
 # ════════════════════════════════════════════════════════════════════════════
 
 @dp.message(Command("start"))
@@ -926,16 +1229,60 @@ async def start(message: types.Message):
         "Hola! Soy tu analista de mercados.\n\n"
         "Comandos:\n"
         "/analisis — Indices y Bitcoin en tiempo real\n"
-        "/macro — VIX, DXY, yields y contexto macro\n"
-        "/precio TICKER — Precio en tiempo real\n"
-        "/acciones — Top 5 (tecnico+macro+social+insiders+opciones)\n"
+        "/acciones — Top 5 con analisis completo\n"
         "/sectores — Mapa de rendimiento por sector\n"
+        "/economia — Fear & Greed, FOMC y calendario macro\n"
+        "/macro — VIX, DXY, yields\n"
+        "/precio TICKER — Precio en tiempo real\n"
         "/sentimiento TICKER — Sentimiento social completo\n"
         "/noticias — Titulares de mercado y geopolitica\n"
-        "/rendimiento — Historial de recomendaciones anteriores\n"
-        "/suscribir — Alertas diarias 9:30 AM NY + alertas noticias\n"
+        "/rendimiento — Historial de recomendaciones\n"
+        "/suscribir — Alertas diarias 9:30 AM NY\n"
         "/cancelar — Cancelar alertas"
     )
+
+@dp.message(Command("economia"))
+async def economia(message: types.Message):
+    await message.answer("Obteniendo indicadores macro y calendario...")
+    fg_score, fg_rating = await get_fear_greed()
+    cal_events = check_risk_calendar()
+
+    lines = ["Indicadores de mercado:\n"]
+
+    if fg_score is not None:
+        fg_label = ("Miedo extremo" if fg_score <= 25 else
+                    "Miedo"         if fg_score <= 45 else
+                    "Neutral"       if fg_score <= 55 else
+                    "Codicia"       if fg_score <= 75 else
+                    "Codicia extrema")
+        bar = "#" * (fg_score // 10)
+        lines.append(f"Fear & Greed: {fg_score}/100 — {fg_label}")
+        lines.append(f"  [{bar}]")
+        if fg_score <= 25:
+            lines.append("  -> Momento historico para comprar calidad")
+        elif fg_score >= 80:
+            lines.append("  -> Euforia excesiva — reducir exposicion")
+        lines.append("")
+
+    lines.append("Calendario de riesgo proximos dias:")
+    if cal_events:
+        for ev in cal_events:
+            lines.append(f"  ! {ev}")
+    else:
+        lines.append("  Sin eventos criticos inmediatos")
+
+    lines.append("")
+    lines.append("Proximas reuniones FOMC 2026:")
+    today = datetime.now().date()
+    shown = 0
+    for ds in FOMC_DATES:
+        d    = datetime.strptime(ds, "%Y-%m-%d").date()
+        diff = (d - today).days
+        if diff >= 0 and shown < 4:
+            lines.append(f"  • {ds} (en {diff} dias)")
+            shown += 1
+
+    await message.answer("\n".join(lines))
 
 @dp.message(Command("macro"))
 async def macro_cmd(message: types.Message):
@@ -971,8 +1318,9 @@ async def analisis(message: types.Message):
 async def acciones(message: types.Message):
     await message.answer(
         f"Analizando {len(STOCKS)} acciones...\n"
-        "Tecnico + macro + semanal + insiders + opciones + sentimiento\n"
-        "Espera 2-3 min (o datos desde cache si hay analisis reciente)."
+        "Tecnico + Bollinger + ATR + Golden Cross + OBV + Fuerza relativa\n"
+        "+ Fear&Greed + Analistas + Short squeeze + Calendario FOMC\n"
+        "Espera 3-4 min."
     )
     recs, macro_lines = await get_recommendations()
     await message.answer(format_recommendations(recs, macro_lines))
@@ -984,7 +1332,6 @@ async def sectores(message: types.Message):
     if not perf:
         await message.answer("No se pudieron obtener datos de sectores.")
         return
-
     sorted_s = sorted(perf.items(), key=lambda x: x[1], reverse=True)
     lines    = [
         "Sectores — Rendimiento hoy:",
@@ -996,7 +1343,6 @@ async def sectores(message: types.Message):
         arrow = "+" if chg > 0.1 else "-" if chg < -0.1 else " "
         bars  = "#" * min(int(abs(chg) * 3), 9)
         lines.append(f"[{arrow}] {name:<14} {sign}{chg:.2f}%  {bars}")
-
     best  = sorted_s[0][0]  if sorted_s else "-"
     worst = sorted_s[-1][0] if sorted_s else "-"
     lines.append("━" * 30)
@@ -1027,11 +1373,12 @@ async def sentimiento(message: types.Message):
         await message.answer("Uso: /sentimiento TICKER  Ej: /sentimiento NVDA"); return
     ticker = parts[1].upper()
     await message.answer(f"Analizando sentimiento de {ticker}...")
-    (fh_score, fh_label), (soc_score, soc_labels), quote, insider = await asyncio.gather(
+    (fh_score, fh_label), (soc_score, soc_labels), quote, insider, analyst = await asyncio.gather(
         get_finnhub_sentiment(ticker),
         get_social_sentiment_only(ticker),
         get_finnhub_quote(ticker),
         get_insider_buying(ticker),
+        get_analyst_recommendation(ticker),
     )
     lines = [f"Sentimiento — {ticker}\n"]
     if quote:
@@ -1043,6 +1390,11 @@ async def sentimiento(message: types.Message):
             lines.append(f"• {l}")
     if insider:
         lines.append(f"\nInsiders: {insider['count']} compras recientes ({insider['shares']:,} acciones)")
+    if analyst and analyst["total"] >= 5:
+        lines.append(f"\nAnalistas ({analyst['total']} total):")
+        lines.append(f"  Strong Buy: {analyst['sb']}  Buy: {analyst['b']}  "
+                     f"Hold: {analyst['h']}  Sell: {analyst['s']+analyst['ss']}")
+        lines.append(f"  Consenso: {analyst['bull_pct']:.0f}% alcista")
     total   = fh_score + soc_score
     verdict = "POSITIVO" if total >= 2 else "NEGATIVO" if total <= -2 else "NEUTRO"
     lines.append(f"\nResumen: {verdict} (score {total:+d})")
@@ -1075,8 +1427,7 @@ async def suscribir(message: types.Message):
     await message.answer(
         "Suscrito.\n\n"
         "Recibiras:\n"
-        "• Recomendaciones diarias a las 9:30 AM (hora NY)\n"
-        "• Alertas inmediatas de noticias de alto impacto"
+        "• Recomendaciones diarias a las 9:30 AM (hora NY)"
     )
 
 @dp.message(Command("cancelar"))
@@ -1087,7 +1438,7 @@ async def cancelar(message: types.Message):
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# 14. JOBS PROGRAMADOS
+# 17. JOBS PROGRAMADOS
 # ════════════════════════════════════════════════════════════════════════════
 
 async def send_daily_recommendations():
