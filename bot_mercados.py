@@ -1104,7 +1104,7 @@ async def send_daily_recommendations():
 
 async def main():
     scheduler.add_job(send_daily_recommendations, "cron", hour=9, minute=30)
-    scheduler.add_job(check_news_alerts, "interval", minutes=20)
+    # scheduler.add_job(check_news_alerts, "interval", minutes=20)  # desactivado
     scheduler.start()
     await dp.start_polling(bot)
 
