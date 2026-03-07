@@ -1,23 +1,28 @@
-from aiogram import Bot, Dispatcher, types
+from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import asyncio, os, json, aiohttp, yfinance as yf, pandas as pd
 from datetime import datetime, timedelta
+import anthropic
 
 TOKEN        = os.environ.get("BOT_TOKEN",    "8616657604:AAGQI9e_x9ZX5zw6zcHIloboeDO18OrKRBM")
 FINNHUB_KEY  = os.environ.get("FINNHUB_KEY",  "d6j133pr01qleu95u19gd6j133pr01qleu95u1a0")
 NEWSDATA_KEY = os.environ.get("NEWSDATA_KEY", "pub_4cbb2798d21e439186e168313963b1bb")
+ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_KEY) if ANTHROPIC_KEY else None
 
 bot       = Bot(token=TOKEN)
 dp        = Dispatcher()
 scheduler = AsyncIOScheduler(timezone="America/New_York")
 HEADERS   = {"User-Agent": "Mozilla/5.0"}
-sent_articles = set()
 
-PERF_FILE            = "/tmp/performance.json"
-CACHE_FILE           = "/tmp/recommendations_cache.json"
-PREV_CANDIDATES_FILE = "/tmp/prev_candidates.json"
-SUBS_FILE            = "/tmp/subscribers.json"
+DATA_DIR             = "/app/data"
+os.makedirs(DATA_DIR, exist_ok=True)
+PERF_FILE            = f"{DATA_DIR}/performance.json"
+CACHE_FILE           = f"{DATA_DIR}/recommendations_cache.json"
+PREV_CANDIDATES_FILE = f"{DATA_DIR}/prev_candidates.json"
+SUBS_FILE            = f"{DATA_DIR}/subscribers.json"
+SENT_ARTICLES_FILE   = f"{DATA_DIR}/sent_articles.json"
 
 def load_subscribers():
     try:
@@ -33,7 +38,23 @@ def save_subscribers(subs):
     except Exception:
         pass
 
+def load_sent_articles():
+    try:
+        with open(SENT_ARTICLES_FILE) as f:
+            return set(json.load(f))
+    except Exception:
+        return set()
+
+def save_sent_articles():
+    try:
+        articles_list = list(sent_articles)[-200:]
+        with open(SENT_ARTICLES_FILE, "w") as f:
+            json.dump(articles_list, f)
+    except Exception:
+        pass
+
 subscribers = load_subscribers()
+sent_articles = load_sent_articles()
 
 # ── Palabras clave de alto impacto ───────────────────────────────────────────
 IMPACT_KEYWORDS = [
@@ -146,7 +167,8 @@ SECTOR_ETFS = {
 }
 
 # Semaforo para limitar llamadas concurrentes a yfinance info (lento)
-_yf_info_sem = asyncio.Semaphore(4)
+# Inicializado en main() para evitar RuntimeError en Python 3.12+
+_yf_info_sem = None
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -180,7 +202,7 @@ def calc_rsi(closes, period=14):
     delta = closes.diff()
     gain  = delta.clip(lower=0).rolling(period).mean()
     loss  = (-delta.clip(upper=0)).rolling(period).mean()
-    rs    = gain / loss
+    rs    = gain / loss.replace(0, 1e-10)
     return (100 - (100 / (1 + rs))).iloc[-1]
 
 def calc_macd(closes):
@@ -604,6 +626,45 @@ async def get_short_interest(ticker):
     async with _yf_info_sem:
         try:
             return await asyncio.wait_for(asyncio.to_thread(fetch), timeout=8.0)
+        except Exception:
+            return None
+
+
+async def get_fundamentals(ticker):
+    def fetch():
+        info = yf.Ticker(ticker).info
+        if not info or not info.get("longName"):
+            return None
+        return {
+            "longName":                       info.get("longName"),
+            "sector":                         info.get("sector"),
+            "industry":                       info.get("industry"),
+            "marketCap":                      info.get("marketCap"),
+            "totalRevenue":                   info.get("totalRevenue"),
+            "revenueGrowth":                  info.get("revenueGrowth"),
+            "earningsGrowth":                 info.get("earningsGrowth"),
+            "grossMargins":                   info.get("grossMargins"),
+            "operatingMargins":               info.get("operatingMargins"),
+            "profitMargins":                  info.get("profitMargins"),
+            "ebitdaMargins":                  info.get("ebitdaMargins"),
+            "totalDebt":                      info.get("totalDebt"),
+            "totalCash":                      info.get("totalCash"),
+            "debtToEquity":                   info.get("debtToEquity"),
+            "currentRatio":                   info.get("currentRatio"),
+            "trailingPE":                     info.get("trailingPE"),
+            "forwardPE":                      info.get("forwardPE"),
+            "priceToBook":                    info.get("priceToBook"),
+            "priceToSalesTrailingTwelveMonths": info.get("priceToSalesTrailingTwelveMonths"),
+            "enterpriseToEbitda":             info.get("enterpriseToEbitda"),
+            "returnOnEquity":                 info.get("returnOnEquity"),
+            "returnOnAssets":                 info.get("returnOnAssets"),
+            "dividendYield":                  info.get("dividendYield"),
+            "fiftyTwoWeekHigh":               info.get("fiftyTwoWeekHigh"),
+            "fiftyTwoWeekLow":                info.get("fiftyTwoWeekLow"),
+        }
+    async with _yf_info_sem:
+        try:
+            return await asyncio.wait_for(asyncio.to_thread(fetch), timeout=10.0)
         except Exception:
             return None
 
@@ -1091,6 +1152,167 @@ def format_recommendations(recs, macro_lines=None, titulo="Recomendaciones corto
     return "\n".join(lines)
 
 
+def format_fundamental_report(ticker, fund, quote, analyst, price_tgt):
+    def fmt_pct(v):
+        return f"{v*100:.1f}%" if v is not None else "N/A"
+    def fmt_x(v):
+        return f"{v:.1f}x" if v is not None else "N/A"
+    def fmt_b(v):
+        if v is None:
+            return "N/A"
+        if abs(v) >= 1e12:
+            return f"${v/1e12:.2f}T"
+        if abs(v) >= 1e9:
+            return f"${v/1e9:.2f}B"
+        if abs(v) >= 1e6:
+            return f"${v/1e6:.2f}M"
+        return f"${v:,.0f}"
+
+    lines = [
+        f"Análisis Fundamental — {ticker}",
+        "━"*30,
+    ]
+
+    lines.append(f"• Empresa:   {fund.get('longName', ticker)}")
+    if fund.get("sector"):
+        lines.append(f"• Sector:    {fund['sector']}")
+    if fund.get("industry"):
+        lines.append(f"• Industria: {fund['industry']}")
+    lines.append(f"• Mkt Cap:   {fmt_b(fund.get('marketCap'))}")
+
+    price = quote["price"] if quote else None
+    w52h  = fund.get("fiftyTwoWeekHigh")
+    w52l  = fund.get("fiftyTwoWeekLow")
+    if price is not None:
+        change_str = f" ({quote['change']:+.2f}%)" if quote.get("change") is not None else ""
+        lines.append(f"\nPrecio: ${price:,.2f}{change_str}")
+    if w52h and w52l:
+        lines.append(f"• 52w: ${w52l:,.2f} — ${w52h:,.2f}")
+
+    lines.append("\nVALORACIÓN")
+    lines.append(f"• P/E trailing: {fmt_x(fund.get('trailingPE'))}")
+    lines.append(f"• P/E forward:  {fmt_x(fund.get('forwardPE'))}")
+    lines.append(f"• P/B:          {fmt_x(fund.get('priceToBook'))}")
+    lines.append(f"• P/S (TTM):    {fmt_x(fund.get('priceToSalesTrailingTwelveMonths'))}")
+    lines.append(f"• EV/EBITDA:    {fmt_x(fund.get('enterpriseToEbitda'))}")
+
+    lines.append("\nCRECIMIENTO")
+    lines.append(f"• Revenue YoY:  {fmt_pct(fund.get('revenueGrowth'))}")
+    lines.append(f"• Earnings YoY: {fmt_pct(fund.get('earningsGrowth'))}")
+    lines.append(f"• ROE:          {fmt_pct(fund.get('returnOnEquity'))}")
+    lines.append(f"• ROA:          {fmt_pct(fund.get('returnOnAssets'))}")
+
+    lines.append("\nMÁRGENES")
+    lines.append(f"• Bruto:        {fmt_pct(fund.get('grossMargins'))}")
+    lines.append(f"• Operativo:    {fmt_pct(fund.get('operatingMargins'))}")
+    lines.append(f"• Neto:         {fmt_pct(fund.get('profitMargins'))}")
+    lines.append(f"• EBITDA:       {fmt_pct(fund.get('ebitdaMargins'))}")
+
+    total_debt = fund.get("totalDebt")
+    total_cash = fund.get("totalCash")
+    net = None
+    if total_cash is not None and total_debt is not None:
+        net = total_cash - total_debt
+    lines.append("\nDEUDA")
+    lines.append(f"• D/E ratio:    {fmt_x(fund.get('debtToEquity'))}")
+    lines.append(f"• Current ratio:{fmt_x(fund.get('currentRatio'))}")
+    if net is not None:
+        label = "Cash neto" if net >= 0 else "Deuda neta"
+        lines.append(f"• {label}: {fmt_b(abs(net))}")
+
+    if analyst and analyst["total"] >= 3:
+        lines.append("\nCONSENSO ANALISTAS")
+        lines.append(f"• Total: {analyst['total']} | "
+                     f"SB:{analyst['sb']} B:{analyst['b']} H:{analyst['h']} "
+                     f"S:{analyst['s']} SS:{analyst['ss']}")
+        lines.append(f"• Alcista: {analyst['bull_pct']:.0f}%")
+    if price_tgt and price_tgt.get("mean"):
+        lines.append(f"• Price target: ${price_tgt['mean']:,.2f} "
+                     f"(L:${price_tgt['low']:,.2f} H:${price_tgt['high']:,.2f})")
+
+    if fund.get("dividendYield"):
+        lines.append(f"\nDividendo: {fmt_pct(fund['dividendYield'])}")
+
+    return "\n".join(lines)
+
+
+async def get_claude_fundamental_analysis(ticker, fund, quote, analyst, price_tgt):
+    def fmt_pct(v):
+        return f"{v*100:.1f}%" if v is not None else "N/A"
+    def fmt_x(v):
+        return f"{v:.1f}x" if v is not None else "N/A"
+    def fmt_b(v):
+        if v is None:
+            return "N/A"
+        if abs(v) >= 1e12:
+            return f"${v/1e12:.2f}T"
+        if abs(v) >= 1e9:
+            return f"${v/1e9:.2f}B"
+        if abs(v) >= 1e6:
+            return f"${v/1e6:.2f}M"
+        return f"${v:,.0f}"
+
+    price = quote["price"] if quote else None
+    analyst_str = "N/A"
+    if analyst and analyst["total"] >= 3:
+        analyst_str = (f"SB:{analyst['sb']} B:{analyst['b']} H:{analyst['h']} "
+                       f"S:{analyst['s']} SS:{analyst['ss']} | "
+                       f"Alcista {analyst['bull_pct']:.0f}%")
+    pt_str = "N/A"
+    if price_tgt and price_tgt.get("mean"):
+        pt_str = f"${price_tgt['mean']:,.2f} (L:${price_tgt['low']:,.2f} H:${price_tgt['high']:,.2f})"
+
+    data_text = (
+        f"Empresa: {fund.get('longName', ticker)} ({ticker})\n"
+        f"Sector: {fund.get('sector', 'N/A')} | Industria: {fund.get('industry', 'N/A')}\n"
+        f"Market Cap: {fmt_b(fund.get('marketCap'))}\n"
+        f"Precio actual: {'$'+f'{price:,.2f}' if price else 'N/A'}\n"
+        f"52w Low/High: ${fund.get('fiftyTwoWeekLow', 'N/A')} / ${fund.get('fiftyTwoWeekHigh', 'N/A')}\n\n"
+        f"VALORACIÓN\n"
+        f"P/E trailing: {fmt_x(fund.get('trailingPE'))} | P/E forward: {fmt_x(fund.get('forwardPE'))}\n"
+        f"P/B: {fmt_x(fund.get('priceToBook'))} | P/S TTM: {fmt_x(fund.get('priceToSalesTrailingTwelveMonths'))}\n"
+        f"EV/EBITDA: {fmt_x(fund.get('enterpriseToEbitda'))}\n\n"
+        f"CRECIMIENTO\n"
+        f"Revenue YoY: {fmt_pct(fund.get('revenueGrowth'))} | Earnings YoY: {fmt_pct(fund.get('earningsGrowth'))}\n"
+        f"ROE: {fmt_pct(fund.get('returnOnEquity'))} | ROA: {fmt_pct(fund.get('returnOnAssets'))}\n\n"
+        f"MÁRGENES\n"
+        f"Bruto: {fmt_pct(fund.get('grossMargins'))} | Operativo: {fmt_pct(fund.get('operatingMargins'))}\n"
+        f"Neto: {fmt_pct(fund.get('profitMargins'))} | EBITDA: {fmt_pct(fund.get('ebitdaMargins'))}\n\n"
+        f"DEUDA\n"
+        f"D/E ratio: {fmt_x(fund.get('debtToEquity'))} | Current ratio: {fmt_x(fund.get('currentRatio'))}\n"
+        f"Deuda total: {fmt_b(fund.get('totalDebt'))} | Cash: {fmt_b(fund.get('totalCash'))}\n\n"
+        f"CONSENSO ANALISTAS: {analyst_str}\n"
+        f"Price target consenso: {pt_str}\n"
+        f"Dividendo yield: {fmt_pct(fund.get('dividendYield'))}\n"
+    )
+
+    prompt = (
+        f"Analizá la siguiente acción con todos los datos disponibles y dá una recomendación "
+        f"institucional. Estructura tu respuesta así:\n\n"
+        f"1. VEREDICTO: BUY / HOLD / SELL (en negrita)\n"
+        f"2. PRECIO OBJETIVO a 12 meses\n"
+        f"3. TESIS DE INVERSIÓN: 3-4 puntos clave que justifican el veredicto\n"
+        f"4. RIESGOS PRINCIPALES: 2-3 riesgos que podrían invalidar la tesis\n"
+        f"5. CONCLUSIÓN: 1 oración resumiendo el caso de inversión\n\n"
+        f"Datos fundamentales:\n{data_text}"
+    )
+
+    try:
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(
+            None,
+            lambda: anthropic_client.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=1024,
+                system=WALL_STREET_SYSTEM,
+                messages=[{"role": "user", "content": prompt}],
+            )
+        )
+        return response.content[0].text
+    except Exception as e:
+        return f"Error al generar análisis: {e}"
+
+
 # ════════════════════════════════════════════════════════════════════════════
 # 14. ALERTAS DE NOTICIAS
 # ════════════════════════════════════════════════════════════════════════════
@@ -1136,6 +1358,7 @@ async def check_news_alerts():
             msg += f"Palabras clave: {', '.join(matched[:3])}"
 
             sent_articles.add(art_id)
+            save_sent_articles()
             sent_this_cycle += 1
             for chat_id in list(subscribers):
                 try:
@@ -1191,14 +1414,20 @@ async def get_btc_price():
 
 async def get_stooq_price(ticker):
     url = f"https://stooq.com/q/l/?s={ticker}&f=sd2t2ohlcv&h&e=csv"
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url, headers=HEADERS) as r:
-            text   = await r.text()
-            values = text.strip().split("\n")[1].split(",")
-            if "N/D" in values:
-                return None, None
-            c = float(values[6]); o = float(values[3])
-            return c, ((c - o) / o) * 100
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=HEADERS) as r:
+                text  = await r.text()
+                rows  = text.strip().split("\n")
+                if len(rows) < 2:
+                    return None, None
+                values = rows[1].split(",")
+                if "N/D" in values or len(values) < 7:
+                    return None, None
+                c = float(values[6]); o = float(values[3])
+                return c, ((c - o) / o) * 100
+    except Exception:
+        return None, None
 
 async def get_social_sentiment_only(ticker):
     st, (reddit_n, reddit_up) = await asyncio.gather(
@@ -1234,11 +1463,14 @@ async def start(message: types.Message):
         "/economia — Fear & Greed, FOMC y calendario macro\n"
         "/macro — VIX, DXY, yields\n"
         "/precio TICKER — Precio en tiempo real\n"
+        "/fundamental TICKER — Análisis fundamental + recomendación Wall Street\n"
         "/sentimiento TICKER — Sentimiento social completo\n"
         "/noticias — Titulares de mercado y geopolitica\n"
         "/rendimiento — Historial de recomendaciones\n"
         "/suscribir — Alertas diarias 9:30 AM NY\n"
-        "/cancelar — Cancelar alertas"
+        "/cancelar — Cancelar alertas\n"
+        "/resetclaude — Reiniciar historial de chat con Claude\n\n"
+        "Cualquier mensaje de texto (sin /) va directo a Claude."
     )
 
 @dp.message(Command("economia"))
@@ -1400,6 +1632,48 @@ async def sentimiento(message: types.Message):
     lines.append(f"\nResumen: {verdict} (score {total:+d})")
     await message.answer("\n".join(lines))
 
+@dp.message(Command("fundamental"))
+async def fundamental_cmd(message: types.Message):
+    parts = message.text.strip().split()
+    if len(parts) < 2:
+        await message.answer("Uso: /fundamental TICKER  Ej: /fundamental AAPL")
+        return
+    ticker = parts[1].upper()
+    await message.answer(f"Analizando {ticker}...")
+
+    try:
+        fund, quote, analyst, price_tgt = await asyncio.gather(
+            get_fundamentals(ticker),
+            get_finnhub_quote(ticker),
+            get_analyst_recommendation(ticker),
+            get_price_target(ticker),
+        )
+    except Exception as e:
+        print(f"[fundamental] gather error {ticker}: {e}", flush=True)
+        await message.answer(f"Error obteniendo datos para {ticker}: {e}")
+        return
+
+    if not fund:
+        await message.answer(f"No se encontraron datos fundamentales para {ticker}.")
+        return
+
+    try:
+        await message.answer(format_fundamental_report(ticker, fund, quote, analyst, price_tgt))
+    except Exception as e:
+        print(f"[fundamental] format error {ticker}: {e}", flush=True)
+        await message.answer(f"Error formateando reporte: {e}")
+        return
+
+    if anthropic_client:
+        await message.answer("Generando análisis Wall Street...")
+        try:
+            analysis = await get_claude_fundamental_analysis(ticker, fund, quote, analyst, price_tgt)
+            await message.answer(analysis)
+        except Exception as e:
+            print(f"[fundamental] claude error {ticker}: {e}", flush=True)
+            await message.answer(f"Error en análisis Claude: {e}")
+
+
 @dp.message(Command("noticias"))
 async def noticias(message: types.Message):
     await message.answer("Obteniendo noticias...")
@@ -1438,7 +1712,83 @@ async def cancelar(message: types.Message):
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# 17. JOBS PROGRAMADOS
+# 17. CLAUDE CHAT
+# ════════════════════════════════════════════════════════════════════════════
+
+CLAUDE_SYSTEM = (
+    "Sos un asistente de análisis de mercados financieros integrado en un bot de Telegram. "
+    "Tenés acceso a comandos del bot como /acciones, /analisis, /precio, /sectores. "
+    "Respondés en español, de forma concisa y clara. Podés analizar acciones, explicar indicadores "
+    "técnicos (RSI, MACD, Bollinger), discutir noticias de mercado y ayudar al usuario a interpretar "
+    "los resultados del bot."
+)
+
+WALL_STREET_SYSTEM = (
+    "Sos un analista senior de Wall Street especializado en renta variable. "
+    "Analizás acciones con rigor institucional. Tus recomendaciones son directas, "
+    "respaldadas por datos, y siempre incluyen un veredicto claro (BUY/HOLD/SELL), "
+    "precio objetivo y análisis de riesgo/retorno. Respondés en español."
+)
+
+user_conversations: dict = {}
+MAX_HISTORY = 20
+
+
+@dp.message()
+async def claude_chat(message: types.Message):
+    print(f"[DEBUG] mensaje recibido: chat={message.chat.id} type={message.chat.type} text={repr(message.text)}", flush=True)
+    try:
+        if not message.text or message.text.startswith("/"):
+            print("[DEBUG] filtrado: sin texto o comando", flush=True)
+            return
+        if not anthropic_client:
+            await message.answer(
+                "Claude no está configurado.\n"
+                f"ANTHROPIC_KEY set: {'sí' if ANTHROPIC_KEY else 'no'}"
+            )
+            return
+
+        await message.answer("Pensando...")
+
+        chat_id = message.chat.id
+        user_text = message.text
+
+        if chat_id not in user_conversations:
+            user_conversations[chat_id] = []
+
+        history = user_conversations[chat_id]
+        history.append({"role": "user", "content": user_text})
+
+        if len(history) > MAX_HISTORY:
+            history = history[-MAX_HISTORY:]
+            user_conversations[chat_id] = history
+
+        response = await asyncio.to_thread(
+            lambda: anthropic_client.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=1024,
+                system=CLAUDE_SYSTEM,
+                messages=history,
+            )
+        )
+        reply = response.content[0].text
+        history.append({"role": "assistant", "content": reply})
+        await message.answer(reply)
+    except Exception as e:
+        try:
+            await message.answer(f"Error: {e}")
+        except Exception:
+            pass
+
+
+@dp.message(Command("resetclaude"))
+async def reset_claude(message: types.Message):
+    user_conversations.pop(message.chat.id, None)
+    await message.answer("Historial de conversación reiniciado.")
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# 18. JOBS PROGRAMADOS
 # ════════════════════════════════════════════════════════════════════════════
 
 async def send_daily_recommendations():
@@ -1454,6 +1804,8 @@ async def send_daily_recommendations():
 
 
 async def main():
+    global _yf_info_sem
+    _yf_info_sem = asyncio.Semaphore(4)
     scheduler.add_job(send_daily_recommendations, "cron", hour=9, minute=30)
     # scheduler.add_job(check_news_alerts, "interval", minutes=20)  # desactivado
     scheduler.start()
