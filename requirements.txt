@@ -4,4 +4,4 @@ apscheduler
 pandas
 tzdata
 lxml
-anthropic
+anthropic>=0.40.0
