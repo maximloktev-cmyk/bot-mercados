@@ -1047,6 +1047,24 @@ async def get_recommendations(force_refresh=False):
     if not candidates:
         candidates = ranked[:5]
 
+    # ── 6b. Filtro market cap (max $10B) ─────────────────────────────────────
+    async def get_market_cap(ticker):
+        def fetch():
+            return yf.Ticker(ticker).info.get("marketCap")
+        async with _yf_info_sem:
+            try:
+                return await asyncio.wait_for(asyncio.to_thread(fetch), timeout=6.0)
+            except Exception:
+                return None
+
+    cap_values = await asyncio.gather(*[get_market_cap(r["ticker"]) for r in candidates])
+    candidates = [
+        r for r, cap in zip(candidates, cap_values)
+        if cap is None or cap <= 10_000_000_000
+    ]
+    if not candidates:
+        candidates = ranked[:5]
+
     # ── 7. Tendencia semanal + enriquecimiento ────────────────────────────────
     weekly   = await get_weekly_trends([r["ticker"] for r in candidates])
     enriched = await asyncio.gather(*[
